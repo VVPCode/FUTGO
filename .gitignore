@@ -1,3 +1,102 @@
-backend/firebase-admin-key.json
+==========================================
+
+SEGURANÇA E SEGREDOS (CRÍTICO)
+
+==========================================
+
+Nunca envie chaves de API, senhas ou certificados para o repositório
+
 .env
-__pycache__/
+.env.*
+.env.local
+firebase-admin-key.json
+-firebase-adminsdk-.json
+*.pem
+*.key
+
+==========================================
+
+BACKEND (PYTHON / DJANGO)
+
+==========================================
+
+Ficheiros compilados do Python
+
+pycache/
+*.py[cod]
+*$py.class
+
+Bases de dados locais do Django (caso utilizem sqlite3 para testes)
+
+*.sqlite3
+*.sqlite3-journal
+
+Ficheiros estáticos e media do Django gerados localmente
+
+/backend/media/
+/backend/staticfiles/
+
+Ambientes Virtuais (Como o .venv que vi no seu terminal)
+
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+Ficheiros de log e testes do Python
+
+*.log
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+==========================================
+
+FRONTEND E MOBILE (NODE / REACT / VITE)
+
+==========================================
+
+Dependências do Node (Pesam muito, nunca devem ir para o Git)
+
+node_modules/
+jspm_packages/
+
+Pastas de Build (Código compilado para produção)
+
+/frontend/dist/
+/frontend/build/
+/mobile/dist/
+/mobile/build/
+
+Logs de erro do NPM / Yarn
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+==========================================
+
+SISTEMA OPERATIVO E EDITORES DE CÓDIGO
+
+==========================================
+
+Windows
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+macOS
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+Editores de Código (VS Code, IntelliJ, etc)
+
+.vscode/
+.idea/
+*.swp
+*.swo

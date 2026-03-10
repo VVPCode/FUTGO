@@ -131,3 +131,18 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # Opcional: Se quiser evitar o erro da barra no final do URL
 APPEND_SLASH = False
+
+# --- CONFIGURAÇÕES DE ENVIO DE E-MAIL (Exemplo: Gmail) ---
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'pirotivitor3@gmail.com'
+# Gere uma "App Password" na sua conta Google. Não use a sua senha normal!
+EMAIL_HOST_PASSWORD = 'ynfz xbas rytr binv' 
+
+# --- CONFIGURAÇÕES DE SMS (Twilio) ---
+# Encontra isto no painel da Twilio após criar conta gratuita
+TWILIO_SID = 'AC...' 
+TWILIO_TOKEN = '...'
+TWILIO_NUMBER = '+123456789'

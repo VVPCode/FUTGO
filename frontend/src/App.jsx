@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, SearchCode } from 'lucide-react';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -51,6 +51,7 @@ export default function App() {
   const [endBairro, setEndBairro] = useState('');
   const [endCidade, setEndCidade] = useState('');
   const [endEstado, setEndEstado] = useState('');
+  const [isBuscandoCep, setIsBuscandoCep] = useState(false); // NOVO: Estado para o ViaCEP
 
   // ==========================================
   // ESTADOS DO PAINEL ADMIN
@@ -153,18 +154,11 @@ export default function App() {
   const closeAuthModal = () => { setIsAuthModalOpen(false); setAuthStep('email'); setAuthMode('login'); setAuthEmail(''); setAuthNome(''); setAuthCpf(''); setAuthTelefone(''); setAuthOtp(''); setAuthErro(''); setAuthMensagem(''); };
 
   // ==========================================
-  // LÓGICA DE PERFIL E ENDEREÇOS (COM PROTEÇÕES ANTI-TRAVAMENTO)
+  // LÓGICA DE PERFIL E ENDEREÇOS
   // ==========================================
   const openProfileModal = async () => {
-    setIsProfileModalOpen(true); 
-    setProfileTab('dados'); 
-    setProfileErro(''); 
-    setProfileSucesso(''); 
-    setIsConfirmingDelete(false);
-    setIsProfileLoading(false); // <-- GARANTE QUE NUNCA ABRE TRAVADO
-    
-    setEditNome(appUser.nome); 
-    setEditTelefone(appUser.telefone);
+    setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
+    setEditNome(appUser.nome); setEditTelefone(appUser.telefone);
     setIsFetchingData(true);
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`);
@@ -181,14 +175,8 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: editNome, telefone: editTelefone }) });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao atualizar.');
-      
-      setAppUser(data.usuario); 
-      setProfileSucesso('Perfil atualizado com sucesso!');
-    } catch (error) { 
-      setProfileErro(error.message); 
-    } finally { 
-      setIsProfileLoading(false); // SEMPRE DESTRAVA
-    }
+      setAppUser(data.usuario); setProfileSucesso('Perfil atualizado com sucesso!');
+    } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
   const handleDeleteAccount = async () => {
@@ -197,15 +185,8 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'DELETE' });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao apagar conta.');
-      
-      setAppUser(null); 
-      setIsProfileModalOpen(false); 
-      alert("Conta apagada permanentemente.");
-    } catch (error) { 
-      setProfileErro(error.message); 
-    } finally { 
-      setIsProfileLoading(false); // <-- CORRIGE O BUG QUE IMPEDIA CRIAR NOVA CONTA NORMALMENTE
-    }
+      setAppUser(null); setIsProfileModalOpen(false); alert("Conta apagada permanentemente.");
+    } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
   const fetchEnderecos = async () => {
@@ -216,11 +197,54 @@ export default function App() {
     } catch (error) { console.error("Erro ao puxar endereços", error); }
   };
 
+  // --- NOVO: LÓGICA DO VIACEP ---
+  const handleCepChange = async (e) => {
+    // 1. Pega apenas os números digitados
+    let val = e.target.value.replace(/\D/g, '');
+    
+    // 2. Aplica a máscara visual (XXXXX-XXX)
+    let formatado = val;
+    if (val.length > 5) {
+      formatado = val.replace(/^(\d{5})(\d)/, '$1-$2');
+    }
+    setEndCep(formatado);
+
+    // 3. Se atingiu 8 números, dispara a busca na API ViaCEP
+    if (val.length === 8) {
+      setIsBuscandoCep(true);
+      setProfileErro('');
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${val}/json/`);
+        const data = await res.json();
+
+        if (data.erro) {
+          setProfileErro('CEP não encontrado. Por favor, verifique ou preencha manualmente.');
+          return; // Para aqui, mas deixa os campos abertos para digitação manual se quiser
+        }
+
+        // Preenche os campos magicamente
+        setEndRua(data.logradouro || '');
+        setEndBairro(data.bairro || '');
+        setEndCidade(data.localidade || '');
+        setEndEstado(data.uf || '');
+
+        // Move o cursor para o campo "Número"
+        document.getElementById('endNumeroInput')?.focus();
+        setProfileSucesso('Endereço localizado com sucesso!');
+
+      } catch (error) {
+        setProfileErro('Falha ao comunicar com os Correios. Preencha manualmente.');
+      } finally {
+        setIsBuscandoCep(false);
+      }
+    }
+  };
+
   const handleAddEndereco = async (e) => {
     e.preventDefault();
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
     try {
-      const payload = { cep: endCep, rua: endRua, numero: endNumero, complemento: endComplemento, bairro: endBairro, cidade: endCidade, estado: endEstado };
+      const payload = { cep: endCep.replace(/\D/g, ''), rua: endRua, numero: endNumero, complemento: endComplemento, bairro: endBairro, cidade: endCidade, estado: endEstado };
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
@@ -231,11 +255,7 @@ export default function App() {
       setProfileSucesso('Endereço adicionado com sucesso!');
       setProfileTab('enderecos'); 
       setEndCep(''); setEndRua(''); setEndNumero(''); setEndComplemento(''); setEndBairro(''); setEndCidade(''); setEndEstado('');
-    } catch (error) { 
-      setProfileErro(error.message); 
-    } finally { 
-      setIsProfileLoading(false); 
-    }
+    } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
   const handleDeleteEndereco = async (id_endereco) => {
@@ -255,40 +275,19 @@ export default function App() {
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); };
 
   const handleAdminEdit = (produto) => {
-    setAdminErro('');
-    setAdminProdutoEditing(produto);
-    setProdNome(produto.nome_camisa);
-    setProdPreco(produto.preco);
-    setProdCategoria(produto.categoria);
-    setProdImagem(produto.imagem);
-    setAdminTab('formulario');
+    setAdminErro(''); setAdminProdutoEditing(produto); setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria); setProdImagem(produto.imagem); setAdminTab('formulario');
   };
 
   const handleAdminNew = () => {
-    setAdminErro('');
-    setAdminProdutoEditing(null);
-    setProdNome('');
-    setProdPreco('');
-    setProdCategoria('Nacional');
-    setProdImagem(''); 
-    setAdminTab('formulario');
+    setAdminErro(''); setAdminProdutoEditing(null); setProdNome(''); setProdPreco(''); setProdCategoria('Nacional'); setProdImagem(''); setAdminTab('formulario');
   };
 
   const handleAdminSaveProduct = async (e) => {
     e.preventDefault();
     setIsAdminLoading(true); setAdminErro('');
 
-    const headers = {
-      'Content-Type': 'application/json',
-      'X-User-ID': appUser.id_usuario 
-    };
-
-    const payload = {
-      nome_camisa: prodNome,
-      preco: parseFloat(prodPreco),
-      categoria: prodCategoria,
-      imagem: prodImagem
-    };
+    const headers = { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario };
+    const payload = { nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria, imagem: prodImagem };
 
     try {
       if (adminProdutoEditing) {
@@ -303,17 +302,12 @@ export default function App() {
         setProdutos([...produtos, data.produto]);
       }
       setAdminTab('lista');
-    } catch (error) { 
-      setAdminErro(error.message); 
-    } finally { 
-      setIsAdminLoading(false); 
-    }
+    } catch (error) { setAdminErro(error.message); } finally { setIsAdminLoading(false); }
   };
 
   const handleAdminDeleteProduct = async (id) => {
     if(!window.confirm('Tem a certeza que deseja excluir este produto permanentemente?')) return;
     setIsAdminLoading(true); setAdminErro('');
-    
     try {
       const res = await fetch(`${API_BASE_URL}/produtos/${id}/`, { method: 'DELETE', headers: { 'X-User-ID': appUser.id_usuario } });
       const data = await res.json().catch(()=>({}));
@@ -321,11 +315,7 @@ export default function App() {
       
       setProdutos(produtos.filter(p => p.id !== id));
       setCart(cart.filter(item => item.id !== id)); 
-    } catch (error) { 
-      setAdminErro(error.message); 
-    } finally { 
-      setIsAdminLoading(false); 
-    }
+    } catch (error) { setAdminErro(error.message); } finally { setIsAdminLoading(false); }
   };
 
   // ==========================================
@@ -471,7 +461,7 @@ export default function App() {
       )}
 
       {/* ========================================================= */}
-      {/* MODAL DO PERFIL DO UTILIZADOR E ENDEREÇOS (SEM TRAVAMENTOS) */}
+      {/* MODAL DO PERFIL DO UTILIZADOR E ENDEREÇOS (COM VIACEP)    */}
       {/* ========================================================= */}
       {isProfileModalOpen && appUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -585,18 +575,19 @@ export default function App() {
                   </div>
 
                   <div className="relative">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">CEP (Apenas números) *</label>
-                    <input type="text" required maxLength={9} value={endCep} onChange={(e) => setEndCep(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" placeholder="Ex: 01001000" />
+                    <label className="block text-xs font-medium text-gray-700 mb-1">CEP *</label>
+                    <input type="text" required maxLength={9} value={endCep} onChange={handleCepChange} disabled={isBuscandoCep} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none disabled:bg-gray-100" placeholder="Ex: 01001-000" />
+                    {isBuscandoCep && <Loader2 className="absolute right-3 top-7 w-4 h-4 text-green-500 animate-spin" />}
                   </div>
                   
                   <div className="grid grid-cols-4 gap-3">
                     <div className="col-span-3">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Rua / Logradouro *</label>
-                      <input type="text" required value={endRua} onChange={(e) => setEndRua(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" />
+                      <input type="text" required value={endRua} onChange={(e) => setEndRua(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" placeholder="Rua..." />
                     </div>
                     <div className="col-span-1">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Número *</label>
-                      <input type="text" required value={endNumero} onChange={(e) => setEndNumero(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" />
+                      <input type="text" id="endNumeroInput" required value={endNumero} onChange={(e) => setEndNumero(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none shadow-sm" placeholder="123" />
                     </div>
                   </div>
 
@@ -618,11 +609,11 @@ export default function App() {
                     </div>
                     <div className="col-span-1">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Estado (UF) *</label>
-                      <input type="text" required maxLength={2} value={endEstado} onChange={(e) => setEndEstado(e.target.value.toUpperCase())} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" placeholder="SP, RJ..." />
+                      <input type="text" required maxLength={2} value={endEstado} onChange={(e) => setEndEstado(e.target.value.toUpperCase())} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none text-center" placeholder="SP" />
                     </div>
                   </div>
 
-                  <button type="submit" disabled={isProfileLoading} className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg mt-4 disabled:opacity-70 hover:bg-slate-800 transition-colors">
+                  <button type="submit" disabled={isProfileLoading || isBuscandoCep} className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg mt-4 disabled:opacity-70 hover:bg-slate-800 transition-colors">
                     {isProfileLoading ? 'A salvar...' : 'Salvar Endereço'}
                   </button>
                 </form>

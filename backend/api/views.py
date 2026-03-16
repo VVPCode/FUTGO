@@ -7,6 +7,32 @@ from rest_framework import status
 from .serializers import CheckEmailSerializer, RegisterSerializer, LoginOTPSerializer
 from .firebase_config import db
 
+class GoogleAuthView(APIView):
+    def post(self, request):
+        email = request.data.get('email', '').lower()
+        nome = request.data.get('nome', '')
+
+        if not email:
+            return Response({"erro": "E-mail não fornecido pelo Google."}, status=status.HTTP_400_BAD_REQUEST)
+
+        usuarios_ref = db.collection('usuarios')
+        query = usuarios_ref.where('email', '==', email).limit(1).get()
+
+        if len(query) > 0:
+            usuario_data = query[0].to_dict()
+            return Response({
+                "mensagem": "Login com Google efetuado com sucesso!", 
+                "usuario": usuario_data, 
+                "is_new": False
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "mensagem": "Usuário novo. Complete o cadastro.", 
+                "is_new": True, 
+                "email": email, 
+                "nome": nome
+            }, status=status.HTTP_200_OK)
+        
 class CheckEmailView(APIView):
     """
     Endpoint: POST /api/auth/check-email/

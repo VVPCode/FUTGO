@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, SearchCode } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon } from 'lucide-react';
+import { auth as firebaseAuth, googleProvider, facebookProvider } from './firebase'; 
+import { signInWithPopup } from 'firebase/auth';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -14,9 +16,7 @@ export default function App() {
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [busca, setBusca] = useState("");
 
-  // ==========================================
   // ESTADOS DE AUTENTICAÇÃO
-  // ==========================================
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authStep, setAuthStep] = useState('email'); 
   const [authMode, setAuthMode] = useState('login'); 
@@ -30,13 +30,12 @@ export default function App() {
   const [authMensagem, setAuthMensagem] = useState('');
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-  // ==========================================
   // ESTADOS DO PERFIL E ENDEREÇOS
-  // ==========================================
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileTab, setProfileTab] = useState('dados');
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
+  const [editCpf, setEditCpf] = useState(''); // NOVO: Estado para o CPF
   const [profileErro, setProfileErro] = useState('');
   const [profileSucesso, setProfileSucesso] = useState('');
   const [isProfileLoading, setIsProfileLoading] = useState(false);
@@ -51,11 +50,9 @@ export default function App() {
   const [endBairro, setEndBairro] = useState('');
   const [endCidade, setEndCidade] = useState('');
   const [endEstado, setEndEstado] = useState('');
-  const [isBuscandoCep, setIsBuscandoCep] = useState(false); // NOVO: Estado para o ViaCEP
+  const [isBuscandoCep, setIsBuscandoCep] = useState(false);
 
-  // ==========================================
   // ESTADOS DO PAINEL ADMIN
-  // ==========================================
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [adminTab, setAdminTab] = useState('lista'); 
   const [adminProdutoEditing, setAdminProdutoEditing] = useState(null); 
@@ -81,15 +78,37 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/produtos/`);
       const data = await res.json();
       if (res.ok) setProdutos(data);
-    } catch (error) {
-      console.error("Erro ao puxar produtos da base de dados:", error);
-    } finally {
-      setIsLoadingProdutos(false);
-    }
+    } catch (error) { console.error("Erro ao puxar produtos:", error); } 
+    finally { setIsLoadingProdutos(false); }
   };
 
   // ==========================================
-  // LÓGICA DE AUTENTICAÇÃO
+  // LÓGICA DE LOGIN SOCIAL (GOOGLE/FACEBOOK)
+  // ==========================================
+  const handleSocialLogin = async (provider) => {
+    setIsAuthLoading(true); setAuthErro('');
+    try {
+      const result = await signInWithPopup(firebaseAuth, provider);
+      const token = await result.user.getIdToken();
+
+      const res = await fetch(`${API_BASE_URL}/auth/social/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Falha ao autenticar no servidor.');
+
+      setAppUser(data.usuario);
+      closeAuthModal();
+    } catch (error) {
+      setAuthErro('Login cancelado ou erro de autenticação.');
+    } finally { setIsAuthLoading(false); }
+  };
+
+  // ==========================================
+  // LÓGICA DE AUTENTICAÇÃO POR OTP (E-MAIL)
   // ==========================================
   const handleCheckEmail = async (e) => {
     e.preventDefault();
@@ -100,14 +119,8 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
       
-      if (data.existe) { 
-        setAuthMode('login'); 
-        await triggerSendOTP(); 
-      } else { 
-        setAuthMode('register'); 
-        setAuthStep('register'); 
-        setIsAuthLoading(false);
-      }
+      if (data.existe) { setAuthMode('login'); await triggerSendOTP(); } 
+      else { setAuthMode('register'); setAuthStep('register'); setIsAuthLoading(false); }
     } catch (error) { setAuthErro(error.message); setIsAuthLoading(false); }
   };
 
@@ -117,14 +130,8 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/send-otp/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail, method: 'email' }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro ao enviar e-mail.');
-      setAuthMensagem(`Código de acesso enviado para ${authEmail}.`); 
-      setAuthStep('otp');
-    } catch (error) { 
-      setAuthErro(error.message); 
-      throw error; 
-    } finally { 
-      setIsAuthLoading(false); 
-    }
+      setAuthMensagem(`Código de acesso enviado para ${authEmail}.`); setAuthStep('otp');
+    } catch (error) { setAuthErro(error.message); throw error; } finally { setIsAuthLoading(false); }
   };
 
   const handleRegisterFormSubmit = async (e) => {
@@ -146,8 +153,7 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Código inválido ou expirado.');
       
-      setAppUser(data.usuario); 
-      closeAuthModal();
+      setAppUser(data.usuario); closeAuthModal();
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
 
@@ -158,12 +164,20 @@ export default function App() {
   // ==========================================
   const openProfileModal = async () => {
     setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
-    setEditNome(appUser.nome); setEditTelefone(appUser.telefone);
+    setEditNome(appUser.nome); 
+    setEditTelefone(appUser.telefone || '');
+    setEditCpf(appUser.cpf || ''); // Puxa o CPF, se existir
+    
     setIsFetchingData(true);
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`);
       const data = await res.json();
-      if (res.ok) { setAppUser(data.usuario); setEditNome(data.usuario.nome); setEditTelefone(data.usuario.telefone); }
+      if (res.ok) { 
+        setAppUser(data.usuario); 
+        setEditNome(data.usuario.nome); 
+        setEditTelefone(data.usuario.telefone || ''); 
+        setEditCpf(data.usuario.cpf || ''); 
+      }
       await fetchEnderecos(); 
     } catch (error) {} finally { setIsFetchingData(false); }
   };
@@ -172,7 +186,12 @@ export default function App() {
     e.preventDefault();
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: editNome, telefone: editTelefone }) });
+      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { 
+        method: 'PUT', 
+        headers: { 'Content-Type': 'application/json' }, 
+        // Agora envia o CPF também (se o backend aceitar, ele grava e bloqueia)
+        body: JSON.stringify({ nome: editNome, telefone: editTelefone, cpf: editCpf }) 
+      });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao atualizar.');
       setAppUser(data.usuario); setProfileSucesso('Perfil atualizado com sucesso!');
@@ -197,46 +216,24 @@ export default function App() {
     } catch (error) { console.error("Erro ao puxar endereços", error); }
   };
 
-  // --- NOVO: LÓGICA DO VIACEP ---
+  // LÓGICA DO VIACEP
   const handleCepChange = async (e) => {
-    // 1. Pega apenas os números digitados
     let val = e.target.value.replace(/\D/g, '');
-    
-    // 2. Aplica a máscara visual (XXXXX-XXX)
     let formatado = val;
-    if (val.length > 5) {
-      formatado = val.replace(/^(\d{5})(\d)/, '$1-$2');
-    }
+    if (val.length > 5) formatado = val.replace(/^(\d{5})(\d)/, '$1-$2');
     setEndCep(formatado);
 
-    // 3. Se atingiu 8 números, dispara a busca na API ViaCEP
     if (val.length === 8) {
-      setIsBuscandoCep(true);
-      setProfileErro('');
+      setIsBuscandoCep(true); setProfileErro('');
       try {
         const res = await fetch(`https://viacep.com.br/ws/${val}/json/`);
         const data = await res.json();
-
-        if (data.erro) {
-          setProfileErro('CEP não encontrado. Por favor, verifique ou preencha manualmente.');
-          return; // Para aqui, mas deixa os campos abertos para digitação manual se quiser
-        }
-
-        // Preenche os campos magicamente
-        setEndRua(data.logradouro || '');
-        setEndBairro(data.bairro || '');
-        setEndCidade(data.localidade || '');
-        setEndEstado(data.uf || '');
-
-        // Move o cursor para o campo "Número"
+        if (data.erro) { setProfileErro('CEP não encontrado. Preencha manualmente.'); return; }
+        setEndRua(data.logradouro || ''); setEndBairro(data.bairro || ''); setEndCidade(data.localidade || ''); setEndEstado(data.uf || '');
         document.getElementById('endNumeroInput')?.focus();
-        setProfileSucesso('Endereço localizado com sucesso!');
-
-      } catch (error) {
-        setProfileErro('Falha ao comunicar com os Correios. Preencha manualmente.');
-      } finally {
-        setIsBuscandoCep(false);
-      }
+        setProfileSucesso('Endereço localizado!');
+      } catch (error) { setProfileErro('Falha ao comunicar com os Correios.'); } 
+      finally { setIsBuscandoCep(false); }
     }
   };
 
@@ -245,15 +242,10 @@ export default function App() {
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
     try {
       const payload = { cep: endCep.replace(/\D/g, ''), rua: endRua, numero: endNumero, complemento: endComplemento, bairro: endBairro, cidade: endCidade, estado: endEstado };
-      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
+      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao guardar endereço.');
-      
-      setEnderecos([...enderecos, data.endereco]); 
-      setProfileSucesso('Endereço adicionado com sucesso!');
-      setProfileTab('enderecos'); 
+      setEnderecos([...enderecos, data.endereco]); setProfileSucesso('Endereço adicionado com sucesso!'); setProfileTab('enderecos'); 
       setEndCep(''); setEndRua(''); setEndNumero(''); setEndComplemento(''); setEndBairro(''); setEndCidade(''); setEndEstado('');
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
@@ -262,30 +254,20 @@ export default function App() {
     if(!window.confirm('Apagar este endereço?')) return;
     try {
       const res = await fetch(`${API_BASE_URL}/auth/endereco/${id_endereco}/`, { method: 'DELETE' });
-      if (res.ok) {
-        setEnderecos(enderecos.filter(end => end.id_endereco !== id_endereco));
-        setProfileSucesso('Endereço apagado.');
-      }
+      if (res.ok) { setEnderecos(enderecos.filter(end => end.id_endereco !== id_endereco)); setProfileSucesso('Endereço apagado.'); }
     } catch (error) { setProfileErro('Erro ao apagar endereço.'); }
   };
 
   // ==========================================
-  // LÓGICA DO PAINEL ADMIN (PRODUTOS CRUD)
+  // LÓGICA DO PAINEL ADMIN
   // ==========================================
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); };
-
-  const handleAdminEdit = (produto) => {
-    setAdminErro(''); setAdminProdutoEditing(produto); setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria); setProdImagem(produto.imagem); setAdminTab('formulario');
-  };
-
-  const handleAdminNew = () => {
-    setAdminErro(''); setAdminProdutoEditing(null); setProdNome(''); setProdPreco(''); setProdCategoria('Nacional'); setProdImagem(''); setAdminTab('formulario');
-  };
+  const handleAdminEdit = (produto) => { setAdminErro(''); setAdminProdutoEditing(produto); setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria); setProdImagem(produto.imagem); setAdminTab('formulario'); };
+  const handleAdminNew = () => { setAdminErro(''); setAdminProdutoEditing(null); setProdNome(''); setProdPreco(''); setProdCategoria('Nacional'); setProdImagem(''); setAdminTab('formulario'); };
 
   const handleAdminSaveProduct = async (e) => {
     e.preventDefault();
     setIsAdminLoading(true); setAdminErro('');
-
     const headers = { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario };
     const payload = { nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria, imagem: prodImagem };
 
@@ -293,12 +275,12 @@ export default function App() {
       if (adminProdutoEditing) {
         const res = await fetch(`${API_BASE_URL}/produtos/${adminProdutoEditing.id}/`, { method: 'PUT', headers, body: JSON.stringify(payload) });
         const data = await res.json().catch(()=>({}));
-        if (!res.ok) throw new Error(data.erro || 'Falha ao atualizar produto.');
+        if (!res.ok) throw new Error(data.erro || 'Falha ao atualizar.');
         setProdutos(produtos.map(p => p.id === adminProdutoEditing.id ? data.produto : p));
       } else {
         const res = await fetch(`${API_BASE_URL}/produtos/`, { method: 'POST', headers, body: JSON.stringify(payload) });
         const data = await res.json().catch(()=>({}));
-        if (!res.ok) throw new Error(data.erro || 'Falha ao criar produto.');
+        if (!res.ok) throw new Error(data.erro || 'Falha ao criar.');
         setProdutos([...produtos, data.produto]);
       }
       setAdminTab('lista');
@@ -306,15 +288,12 @@ export default function App() {
   };
 
   const handleAdminDeleteProduct = async (id) => {
-    if(!window.confirm('Tem a certeza que deseja excluir este produto permanentemente?')) return;
+    if(!window.confirm('Excluir este produto?')) return;
     setIsAdminLoading(true); setAdminErro('');
     try {
       const res = await fetch(`${API_BASE_URL}/produtos/${id}/`, { method: 'DELETE', headers: { 'X-User-ID': appUser.id_usuario } });
-      const data = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(data.erro || 'Falha ao apagar o produto.');
-      
-      setProdutos(produtos.filter(p => p.id !== id));
-      setCart(cart.filter(item => item.id !== id)); 
+      if (!res.ok) throw new Error('Falha ao apagar.');
+      setProdutos(produtos.filter(p => p.id !== id)); setCart(cart.filter(item => item.id !== id)); 
     } catch (error) { setAdminErro(error.message); } finally { setIsAdminLoading(false); }
   };
 
@@ -326,14 +305,12 @@ export default function App() {
       const existingItem = prevCart.find(item => item.id === produto.id && item.tamanho === tamanho);
       if (existingItem) return prevCart.map(item => (item.id === produto.id && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
       return [...prevCart, { ...produto, tamanho, quantidade: 1 }];
-    });
-    setIsCartOpen(true);
+    }); setIsCartOpen(true);
   };
   const updateQuantity = (id, tamanho, delta) => setCart(prevCart => prevCart.map(item => item.id === id && item.tamanho === tamanho ? { ...item, quantidade: Math.max(1, item.quantidade + delta) } : item));
   const removeFromCart = (id, tamanho) => setCart(prevCart => prevCart.filter(item => !(item.id === id && item.tamanho === tamanho)));
   const cartTotal = useMemo(() => cart.reduce((total, item) => total + (item.preco * item.quantidade), 0), [cart]);
   const cartItemsCount = cart.reduce((count, item) => count + item.quantidade, 0);
-
   const produtosFiltrados = useMemo(() => {
     return produtos.filter(p => (filtroCategoria === "Todas" || p.categoria === filtroCategoria) && p.nome_camisa?.toLowerCase().includes(busca.toLowerCase()));
   }, [filtroCategoria, busca, produtos]);
@@ -412,7 +389,7 @@ export default function App() {
       </main>
 
       {/* ========================================================= */}
-      {/* MODAL DE AUTENTICAÇÃO E OTP */}
+      {/* MODAL DE AUTENTICAÇÃO E LOGIN SOCIAL */}
       {/* ========================================================= */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -430,8 +407,26 @@ export default function App() {
               <form onSubmit={handleCheckEmail} className="space-y-4">
                 <input type="email" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="O seu e-mail de acesso..." />
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-2.5 rounded-lg disabled:opacity-70 hover:bg-slate-800 transition-colors font-medium">
-                  {isAuthLoading ? 'A verificar conta...' : 'Continuar'}
+                  {isAuthLoading ? 'A verificar...' : 'Continuar com E-mail'}
                 </button>
+
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-gray-300"></div>
+                  <span className="flex-shrink-0 mx-4 text-gray-400 text-sm">Ou entre com</span>
+                  <div className="flex-grow border-t border-gray-300"></div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => handleSocialLogin(googleProvider)} disabled={isAuthLoading} className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-5 h-5" alt="Google" />
+                    <span className="text-sm font-medium text-gray-700">Google</span>
+                  </button>
+                  
+                  <button type="button" onClick={() => handleSocialLogin(facebookProvider)} disabled={isAuthLoading} className="flex items-center justify-center gap-2 px-4 py-2 border border-[#1877F2] bg-[#1877F2] rounded-lg hover:bg-blue-700 transition-colors text-white">
+                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                    <span className="text-sm font-medium">Facebook</span>
+                  </button>
+                </div>
               </form>
             )}
 
@@ -461,7 +456,7 @@ export default function App() {
       )}
 
       {/* ========================================================= */}
-      {/* MODAL DO PERFIL DO UTILIZADOR E ENDEREÇOS (COM VIACEP)    */}
+      {/* MODAL DO PERFIL DO UTILIZADOR E ENDEREÇOS */}
       {/* ========================================================= */}
       {isProfileModalOpen && appUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -478,12 +473,8 @@ export default function App() {
             </div>
 
             <div className="flex border-b border-gray-200 bg-white">
-              <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Dados Pessoais
-              </button>
-              <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Meus Endereços
-              </button>
+              <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Dados Pessoais</button>
+              <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Meus Endereços</button>
             </div>
             
             <div className="p-6 overflow-y-auto">
@@ -500,24 +491,32 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-                        <input type="tel" required value={editTelefone} onChange={(e) => setEditTelefone(e.target.value)} disabled={isFetchingData || isProfileLoading} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                        <input type="tel" value={editTelefone} onChange={(e) => setEditTelefone(e.target.value)} disabled={isFetchingData || isProfileLoading} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="Opcional" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">CPF (Bloqueado)</label>
-                        <input type="text" value={appUser.cpf} disabled className="w-full px-4 py-2 bg-gray-100 rounded-lg text-gray-400 cursor-not-allowed" />
+                        {/* NOVO: Verifica se já tem CPF. Se sim, bloqueia. Se não (Google), liberta! */}
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          CPF {appUser.cpf ? '(Bloqueado)' : '(Pendente)'}
+                        </label>
+                        <input 
+                          type="text" 
+                          value={editCpf} 
+                          onChange={(e) => setEditCpf(e.target.value)} 
+                          disabled={isFetchingData || isProfileLoading || appUser.cpf} 
+                          placeholder="Apenas números" 
+                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none ${appUser.cpf ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`} 
+                        />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-500 mb-1">E-mail (Bloqueado)</label>
-                        <input type="email" value={appUser.email} disabled className="w-full px-4 py-2 bg-gray-100 rounded-lg text-gray-400 cursor-not-allowed" />
+                        <input type="email" value={appUser.email} disabled className="w-full px-4 py-2 bg-gray-100 rounded-lg text-gray-500 cursor-not-allowed border-gray-200" />
                       </div>
                     </div>
                     
                     <div className="pt-6 flex flex-col gap-3">
-                      <button type="submit" disabled={isFetchingData || isProfileLoading} className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50">
-                        {isProfileLoading ? 'A gravar...' : 'Salvar Alterações'}
-                      </button>
+                      <button type="submit" disabled={isFetchingData || isProfileLoading} className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50">{isProfileLoading ? 'A gravar...' : 'Salvar Alterações'}</button>
                       <div className="flex justify-between mt-2 pt-4 border-t border-gray-100">
                         <button type="button" onClick={() => { setAppUser(null); setIsProfileModalOpen(false); }} className="text-sm font-medium text-gray-500 hover:text-gray-800 flex items-center gap-1"><LogOut className="w-4 h-4" /> Sair da conta</button>
                         <button type="button" onClick={() => setIsConfirmingDelete(true)} className="text-sm font-medium text-red-500 hover:text-red-700 flex items-center gap-1"><Trash2 className="w-4 h-4" /> Apagar Conta</button>
@@ -541,21 +540,16 @@ export default function App() {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center mb-4">
                     <h4 className="font-bold text-gray-800 flex items-center gap-2"><MapPin className="w-4 h-4 text-green-600" /> Locais de Entrega</h4>
-                    <button onClick={() => {setProfileSucesso(''); setProfileErro(''); setProfileTab('novo_endereco');}} className="text-sm bg-green-50 text-green-700 px-3 py-1.5 rounded border border-green-200 hover:bg-green-100 font-medium flex items-center gap-1">
-                      <Plus className="w-4 h-4" /> Adicionar
-                    </button>
+                    <button onClick={() => {setProfileSucesso(''); setProfileErro(''); setProfileTab('novo_endereco');}} className="text-sm bg-green-50 text-green-700 px-3 py-1.5 rounded border border-green-200 hover:bg-green-100 font-medium flex items-center gap-1"><Plus className="w-4 h-4" /> Adicionar</button>
                   </div>
 
                   {enderecos.length === 0 ? (
-                    <div className="text-center py-8 bg-gray-50 border border-dashed border-gray-300 rounded-lg">
-                      <MapPinned className="w-8 h-8 mx-auto text-gray-400 mb-2" />
-                      <p className="text-sm text-gray-500">Nenhum endereço cadastrado.</p>
-                    </div>
+                    <div className="text-center py-8 bg-gray-50 border border-dashed border-gray-300 rounded-lg"><MapPinned className="w-8 h-8 mx-auto text-gray-400 mb-2" /><p className="text-sm text-gray-500">Nenhum endereço cadastrado.</p></div>
                   ) : (
                     <div className="space-y-3">
                       {enderecos.map(end => (
                         <div key={end.id_endereco} className="p-3 border border-gray-200 rounded-lg hover:border-green-300 transition-colors bg-white relative group">
-                          <button onClick={() => handleDeleteEndereco(end.id_endereco)} className="absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity" title="Remover Endereço"><Trash2 className="w-4 h-4"/></button>
+                          <button onClick={() => handleDeleteEndereco(end.id_endereco)} className="absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-4 h-4"/></button>
                           <p className="font-bold text-sm text-gray-800">{end.rua}, {end.numero}</p>
                           {end.complemento && <p className="text-xs text-gray-500">{end.complemento}</p>}
                           <p className="text-xs text-gray-600 mt-1">{end.bairro} - {end.cidade}/{end.estado}</p>
@@ -583,11 +577,11 @@ export default function App() {
                   <div className="grid grid-cols-4 gap-3">
                     <div className="col-span-3">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Rua / Logradouro *</label>
-                      <input type="text" required value={endRua} onChange={(e) => setEndRua(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" placeholder="Rua..." />
+                      <input type="text" required value={endRua} onChange={(e) => setEndRua(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none" />
                     </div>
                     <div className="col-span-1">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Número *</label>
-                      <input type="text" id="endNumeroInput" required value={endNumero} onChange={(e) => setEndNumero(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none shadow-sm" placeholder="123" />
+                      <input type="text" id="endNumeroInput" required value={endNumero} onChange={(e) => setEndNumero(e.target.value)} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none shadow-sm" />
                     </div>
                   </div>
 
@@ -609,7 +603,7 @@ export default function App() {
                     </div>
                     <div className="col-span-1">
                       <label className="block text-xs font-medium text-gray-700 mb-1">Estado (UF) *</label>
-                      <input type="text" required maxLength={2} value={endEstado} onChange={(e) => setEndEstado(e.target.value.toUpperCase())} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none text-center" placeholder="SP" />
+                      <input type="text" required maxLength={2} value={endEstado} onChange={(e) => setEndEstado(e.target.value.toUpperCase())} className="w-full px-3 py-2 border rounded focus:ring-2 focus:ring-green-500 outline-none text-center" />
                     </div>
                   </div>
 
@@ -632,10 +626,7 @@ export default function App() {
           <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
             
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-slate-900 text-white">
-              <h3 className="font-bold text-xl flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-red-500" /> 
-                Painel Administrativo do Catálogo
-              </h3>
+              <h3 className="font-bold text-xl flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-red-500" /> Painel Administrativo do Catálogo</h3>
               <button onClick={() => setIsAdminModalOpen(false)} className="text-gray-300 hover:text-white"><X className="w-6 h-6" /></button>
             </div>
 
@@ -645,22 +636,14 @@ export default function App() {
               {adminTab === 'lista' ? (
                 <>
                   <div className="flex justify-between items-center mb-6">
-                    <p className="text-sm text-gray-600">Apenas o administrador <strong>({appUser.email})</strong> tem acesso a este ecrã.</p>
-                    <button onClick={handleAdminNew} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm">
-                      <PlusCircle className="w-4 h-4" /> Adicionar Novo Produto
-                    </button>
+                    <p className="text-sm text-gray-600">Acesso administrativo: <strong>{appUser.email}</strong></p>
+                    <button onClick={handleAdminNew} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"><PlusCircle className="w-4 h-4" /> Adicionar Produto</button>
                   </div>
                   
                   <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
                     <table className="w-full text-left text-sm">
                       <thead className="bg-gray-100 border-b border-gray-200 text-gray-600">
-                        <tr>
-                          <th className="px-4 py-3 font-medium">Imagem</th>
-                          <th className="px-4 py-3 font-medium">Nome / Descrição</th>
-                          <th className="px-4 py-3 font-medium">Categoria</th>
-                          <th className="px-4 py-3 font-medium">Preço (R$)</th>
-                          <th className="px-4 py-3 font-medium text-right">Ações</th>
-                        </tr>
+                        <tr><th className="px-4 py-3 font-medium">Imagem</th><th className="px-4 py-3 font-medium">Nome / Descrição</th><th className="px-4 py-3 font-medium">Categoria</th><th className="px-4 py-3 font-medium">Preço (R$)</th><th className="px-4 py-3 font-medium text-right">Ações</th></tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {produtos.length === 0 ? <tr><td colSpan="5" className="text-center py-6 text-gray-500">Sem produtos no banco de dados.</td></tr> : null}
@@ -683,58 +666,23 @@ export default function App() {
               ) : (
                 <form onSubmit={handleAdminSaveProduct} className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
                   <div className="flex justify-between items-center mb-6 border-b pb-4">
-                    <h4 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                      {adminProdutoEditing ? <Edit className="w-5 h-5 text-blue-500"/> : <PlusCircle className="w-5 h-5 text-green-500"/>}
-                      {adminProdutoEditing ? 'Editar Produto' : 'Criar Novo Produto'}
-                    </h4>
+                    <h4 className="font-bold text-gray-800 text-lg flex items-center gap-2">{adminProdutoEditing ? <Edit className="w-5 h-5 text-blue-500"/> : <PlusCircle className="w-5 h-5 text-green-500"/>} {adminProdutoEditing ? 'Editar Produto' : 'Criar Novo Produto'}</h4>
                     <button type="button" onClick={() => setAdminTab('lista')} className="text-sm text-gray-500 hover:underline">Cancelar e Voltar</button>
                   </div>
 
                   <div className="space-y-5">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label>
-                      <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="Ex: Camisa Seleção Brasileira 2024..." />
-                    </div>
-                    
+                    <div><label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label><input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" /></div>
                     <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Preço (R$) *</label>
-                        <input type="number" step="0.01" min="0" required value={prodPreco} onChange={e => setProdPreco(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="299.90" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Categoria *</label>
-                        <select required value={prodCategoria} onChange={e => setProdCategoria(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white">
-                          <option value="Nacional">Nacional</option>
-                          <option value="Europa">Europa</option>
-                          <option value="Seleções">Seleções</option>
-                        </select>
-                      </div>
+                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Preço (R$) *</label><input type="number" step="0.01" min="0" required value={prodPreco} onChange={e => setProdPreco(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" /></div>
+                      <div><label className="block text-sm font-medium text-gray-700 mb-1">Categoria *</label><select required value={prodCategoria} onChange={e => setProdCategoria(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white"><option value="Nacional">Nacional</option><option value="Europa">Europa</option><option value="Seleções">Seleções</option></select></div>
                     </div>
-
                     <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                      <label className="block text-sm font-bold text-gray-800 mb-1 flex items-center gap-1.5"><ImageIcon className="w-4 h-4 text-green-600"/> URL da Imagem do Produto *</label>
-                      <p className="text-xs text-gray-500 mb-3">É obrigatório fornecer no mínimo uma imagem para este produto (Insira um link HTTP/HTTPS).</p>
-                      
-                      <input type="url" required value={prodImagem} onChange={e => setProdImagem(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none mb-4" placeholder="https://exemplo.com/imagem_camisa.jpg" />
-                      
-                      {prodImagem ? (
-                        <div className="mt-2 text-center bg-white p-2 rounded border border-dashed border-gray-300 inline-block">
-                          <p className="text-xs text-gray-500 mb-2">Pré-visualização da Imagem:</p>
-                          <img src={prodImagem} alt="Preview" className="h-40 object-contain mx-auto rounded" onError={(e) => e.target.src = "https://placehold.co/400x500/ffcccc/ff0000?text=Link+Invalido"} />
-                        </div>
-                      ) : (
-                        <div className="mt-2 flex items-center justify-center h-20 bg-gray-100 border border-dashed border-gray-300 rounded text-gray-400 text-sm">
-                          Insira um link acima para ver a imagem
-                        </div>
-                      )}
+                      <label className="block text-sm font-bold text-gray-800 mb-1 flex items-center gap-1.5"><ImageIcon className="w-4 h-4 text-green-600"/> URL da Imagem *</label>
+                      <input type="url" required value={prodImagem} onChange={e => setProdImagem(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none mb-4" />
+                      {prodImagem && <div className="mt-2 text-center bg-white p-2 rounded border border-dashed border-gray-300 inline-block"><img src={prodImagem} alt="Preview" className="h-40 object-contain mx-auto rounded" onError={(e) => e.target.src = "https://placehold.co/400x500/ffcccc/ff0000?text=Link+Invalido"} /></div>}
                     </div>
                   </div>
-
-                  <div className="mt-8 flex gap-3">
-                    <button type="submit" disabled={isAdminLoading} className="flex-1 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-70">
-                      {isAdminLoading ? 'A sincronizar com a Base de Dados...' : (adminProdutoEditing ? 'Salvar Alterações na Nuvem' : 'Criar Produto no Catálogo')}
-                    </button>
-                  </div>
+                  <div className="mt-8 flex gap-3"><button type="submit" disabled={isAdminLoading} className="flex-1 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-70">{isAdminLoading ? 'A sincronizar...' : 'Salvar no Catálogo'}</button></div>
                 </form>
               )}
             </div>

@@ -22,9 +22,13 @@ if not os.path.exists(cred_path):
 
 # Inicializa o Firebase Admin APENAS se ainda não estiver inicializado
 if not firebase_admin._apps:
-    cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
-    print("✅ Firebase Admin SDK conectado com sucesso!")
+    try:
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+        print("✅ Firebase Admin SDK conectado com sucesso!")
+    except Exception as e:
+        print(f"❌ Erro ao conectar Firebase Admin. Erro: {e}")
 
+db = firestore.client()
 # Exporta o cliente do Firestore para ser usado nas Views
 db = firestore.client()

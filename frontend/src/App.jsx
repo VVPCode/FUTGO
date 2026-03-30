@@ -1,7 +1,27 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon } from 'lucide-react';
-import { auth as firebaseAuth, googleProvider, facebookProvider } from './firebase'; 
-import { signInWithPopup } from 'firebase/auth';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, MessageCircle } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup } from 'firebase/auth';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCUqDryo4hiXbbq0vBgiSMn52mtpfHKorg",
+  authDomain: "futgo-50ab3.firebaseapp.com",
+  projectId: "futgo-50ab3",
+  storageBucket: "futgo-50ab3.firebasestorage.app",
+  messagingSenderId: "1037379736383",
+  appId: "1:1037379736383:web:d1265dbd703c1af466f98a"
+};
+
+
+let firebaseAuth, googleProvider, facebookProvider;
+try {
+  const app = initializeApp(firebaseConfig);
+  firebaseAuth = getAuth(app);
+  googleProvider = new GoogleAuthProvider();
+  facebookProvider = new FacebookAuthProvider();
+} catch (error) {
+  console.warn("Firebase:", error);
+}
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -16,15 +36,20 @@ export default function App() {
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [busca, setBusca] = useState("");
 
-  // ESTADOS DE AUTENTICAÇÃO
+  // ESTADOS DE AUTENTICAÇÃO HÍBRIDA
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authStep, setAuthStep] = useState('email'); 
+  const [authStep, setAuthStep] = useState('inicio'); 
   const [authMode, setAuthMode] = useState('login'); 
+  
+  const [authIdentificador, setAuthIdentificador] = useState(''); 
+  const [authMetodo, setAuthMetodo] = useState('email'); 
+  
   const [authEmail, setAuthEmail] = useState('');
   const [authNome, setAuthNome] = useState('');
   const [authCpf, setAuthCpf] = useState('');
   const [authTelefone, setAuthTelefone] = useState('');
   const [authOtp, setAuthOtp] = useState('');
+  
   const [tempUserData, setTempUserData] = useState(null); 
   const [authErro, setAuthErro] = useState('');
   const [authMensagem, setAuthMensagem] = useState('');
@@ -35,7 +60,7 @@ export default function App() {
   const [profileTab, setProfileTab] = useState('dados');
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
-  const [editCpf, setEditCpf] = useState(''); // NOVO: Estado para o CPF
+  const [editCpf, setEditCpf] = useState(''); 
   const [profileErro, setProfileErro] = useState('');
   const [profileSucesso, setProfileSucesso] = useState('');
   const [isProfileLoading, setIsProfileLoading] = useState(false);
@@ -65,81 +90,115 @@ export default function App() {
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
-  // ==========================================
-  // CARREGAR CATÁLOGO INICIAL
-  // ==========================================
-  useEffect(() => {
-    fetchProdutos();
-  }, []);
-
+  useEffect(() => { fetchProdutos(); }, []);
   const fetchProdutos = async () => {
     setIsLoadingProdutos(true);
     try {
       const res = await fetch(`${API_BASE_URL}/produtos/`);
-      const data = await res.json();
-      if (res.ok) setProdutos(data);
-    } catch (error) { console.error("Erro ao puxar produtos:", error); } 
-    finally { setIsLoadingProdutos(false); }
+      if (res.ok) setProdutos(await res.json());
+    } catch (e) { console.error(e); } finally { setIsLoadingProdutos(false); }
   };
 
-  // ==========================================
-  // LÓGICA DE LOGIN SOCIAL (GOOGLE/FACEBOOK)
-  // ==========================================
+  // LOGIN SOCIAL
   const handleSocialLogin = async (provider) => {
-    setIsAuthLoading(true); setAuthErro('');
     try {
       const result = await signInWithPopup(firebaseAuth, provider);
+      setIsAuthLoading(true); setAuthErro('');
       const token = await result.user.getIdToken();
-
-      const res = await fetch(`${API_BASE_URL}/auth/social/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-
+      const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || 'Falha ao autenticar no servidor.');
-
-      setAppUser(data.usuario);
-      closeAuthModal();
+      if (!res.ok) throw new Error(data.erro || 'Falha ao autenticar.');
+      setAppUser(data.usuario); closeAuthModal();
     } catch (error) {
-      setAuthErro('Login cancelado ou erro de autenticação.');
+      if (error.code !== 'auth/popup-closed-by-user') setAuthErro(`Erro: ${error.message}`);
     } finally { setIsAuthLoading(false); }
   };
 
-  // ==========================================
-  // LÓGICA DE AUTENTICAÇÃO POR OTP (E-MAIL)
-  // ==========================================
-  const handleCheckEmail = async (e) => {
+  // AUTENTICAÇÃO INTELIGENTE (E-MAIL OU WHATSAPP COM +55 AUTOMÁTICO)
+  const handleCheckAuth = async (e) => {
     e.preventDefault();
-    if (!authEmail) return;
+    if (!authIdentificador) return;
     setIsAuthLoading(true); setAuthErro(''); setAuthMensagem('');
+    
+    // Lógica para adicionar +55 automaticamente se for telefone
+    let idParaEnvio = authIdentificador.trim();
+    if (!idParaEnvio.includes('@')) {
+      const soNumeros = idParaEnvio.replace(/\D/g, '');
+      // Se já começar por 55 e tiver tamanho de DDI + DDD + Num (>=12), só adiciona o +
+      idParaEnvio = (soNumeros.startsWith('55') && soNumeros.length >= 12) ? `+${soNumeros}` : `+55${soNumeros}`;
+      setAuthIdentificador(idParaEnvio); // Guarda o valor formatado para os próximos passos
+    }
+    
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/check-email/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }) });
+      const res = await fetch(`${API_BASE_URL}/auth/check/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identificador: idParaEnvio }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
       
-      if (data.existe) { setAuthMode('login'); await triggerSendOTP(); } 
-      else { setAuthMode('register'); setAuthStep('register'); setIsAuthLoading(false); }
+      setAuthMetodo(data.metodo);
+      
+      if (data.existe) { 
+        setAuthMode('login'); 
+        await triggerSendOTP(data.metodo, idParaEnvio); 
+      } else { 
+        // Preenche os campos do formulário de registo dependendo do método
+        if (data.metodo === 'email') setAuthEmail(idParaEnvio);
+        if (data.metodo === 'whatsapp') {
+          // Removemos o +55 apenas visualmente para o input do formulário de registo
+          const numExibicao = idParaEnvio.startsWith('+55') ? idParaEnvio.slice(3) : idParaEnvio;
+          setAuthTelefone(numExibicao);
+        }
+        
+        setAuthMode('register'); 
+        setAuthStep('register'); 
+        setIsAuthLoading(false); 
+      }
     } catch (error) { setAuthErro(error.message); setIsAuthLoading(false); }
   };
 
-  const triggerSendOTP = async () => {
+  const triggerSendOTP = async (metodo, identificador) => {
     setIsAuthLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/send-otp/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail, method: 'email' }) });
+      const res = await fetch(`${API_BASE_URL}/auth/send-otp/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identificador, method: metodo }) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || 'Erro ao enviar e-mail.');
-      setAuthMensagem(`Código de acesso enviado para ${authEmail}.`); setAuthStep('otp');
+      if (!res.ok) throw new Error(data.erro || 'Erro ao enviar código.');
+      setAuthMensagem(`Código OTP enviado por ${metodo.toUpperCase()} para ${identificador}.`); 
+      setAuthStep('otp');
     } catch (error) { setAuthErro(error.message); throw error; } finally { setIsAuthLoading(false); }
   };
 
   const handleRegisterFormSubmit = async (e) => {
     e.preventDefault();
-    if (!authNome || !authCpf || !authTelefone) return setAuthErro('Preencha os campos obrigatórios.');
+    if (!authNome || !authCpf || !authTelefone || !authEmail) return setAuthErro('Preencha os campos obrigatórios.');
     setIsAuthLoading(true); setAuthErro(''); setAuthMensagem('');
-    setTempUserData({ nome: authNome, cpf: authCpf, telefone: authTelefone });
-    try { await triggerSendOTP(); } catch (e) {}
+    
+    // Garante que o telefone no formulário de registo também ganha o +55 se alterado pelo utilizador
+    let telParaEnvio = authTelefone.replace(/\D/g, '');
+    if (telParaEnvio) {
+       telParaEnvio = (telParaEnvio.startsWith('55') && telParaEnvio.length >= 12) ? `+${telParaEnvio}` : `+55${telParaEnvio}`;
+    }
+
+    // Validação extra cruzada: Se o utilizador entrou com email, valida se o telefone digitado já tem conta.
+    // Se entrou com telefone, valida se o email já tem conta. Segue a mesma lógica rigorosa da entrada.
+    try {
+      const checkIdentificador = authMetodo === 'whatsapp' ? authEmail : telParaEnvio;
+      const checkRes = await fetch(`${API_BASE_URL}/auth/check/`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ identificador: checkIdentificador }) 
+      });
+      const checkData = await checkRes.json();
+      
+      if (checkData.existe) {
+        setAuthErro(`Este ${authMetodo === 'whatsapp' ? 'E-mail' : 'WhatsApp'} já possui uma conta registada. Por favor, utilize a opção de Login na página inicial.`);
+        setIsAuthLoading(false);
+        return;
+      }
+    } catch (err) {
+      console.warn("Aviso ao verificar duplicidade no formulário extra:", err);
+    }
+
+    setTempUserData({ nome: authNome, email: authEmail, cpf: authCpf, telefone: telParaEnvio });
+    try { await triggerSendOTP(authMetodo, authMetodo === 'whatsapp' ? telParaEnvio : authIdentificador); } catch (e) {}
   };
 
   const handleVerifyOtp = async (e) => {
@@ -147,7 +206,9 @@ export default function App() {
     setIsAuthLoading(true); setAuthErro('');
     try {
       let endpoint = authMode === 'login' ? '/auth/login/' : '/auth/register/';
-      let payload = authMode === 'login' ? { email: authEmail, otp: authOtp } : { nome: tempUserData.nome, email: authEmail, cpf: tempUserData.cpf, telefone: tempUserData.telefone, otp: authOtp };
+      let payload = authMode === 'login' 
+        ? { identificador: authIdentificador, otp: authOtp } 
+        : { ...tempUserData, identificador: authIdentificador, otp: authOtp };
       
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
@@ -157,17 +218,18 @@ export default function App() {
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
 
-  const closeAuthModal = () => { setIsAuthModalOpen(false); setAuthStep('email'); setAuthMode('login'); setAuthEmail(''); setAuthNome(''); setAuthCpf(''); setAuthTelefone(''); setAuthOtp(''); setAuthErro(''); setAuthMensagem(''); };
+  const closeAuthModal = () => { setIsAuthModalOpen(false); setAuthStep('inicio'); setAuthMode('login'); setAuthIdentificador(''); setAuthEmail(''); setAuthNome(''); setAuthCpf(''); setAuthTelefone(''); setAuthOtp(''); setAuthErro(''); setAuthMensagem(''); };
 
-  // ==========================================
-  // LÓGICA DE PERFIL E ENDEREÇOS
-  // ==========================================
+  // PERFIL E ENDEREÇOS
   const openProfileModal = async () => {
     setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
-    setEditNome(appUser.nome); 
-    setEditTelefone(appUser.telefone || '');
-    setEditCpf(appUser.cpf || ''); // Puxa o CPF, se existir
+    setEditNome(appUser.nome); setEditCpf(appUser.cpf || ''); 
     
+    // Formatação visual do telefone para remover o 55 no perfil
+    let telVisual = String(appUser.telefone || '');
+    if (telVisual.startsWith('55') && telVisual.length >= 12) telVisual = telVisual.slice(2);
+    setEditTelefone(telVisual);
+
     setIsFetchingData(true);
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`);
@@ -175,8 +237,11 @@ export default function App() {
       if (res.ok) { 
         setAppUser(data.usuario); 
         setEditNome(data.usuario.nome); 
-        setEditTelefone(data.usuario.telefone || ''); 
         setEditCpf(data.usuario.cpf || ''); 
+        
+        let telAPI = String(data.usuario.telefone || '');
+        if (telAPI.startsWith('55') && telAPI.length >= 12) telAPI = telAPI.slice(2);
+        setEditTelefone(telAPI);
       }
       await fetchEnderecos(); 
     } catch (error) {} finally { setIsFetchingData(false); }
@@ -185,13 +250,14 @@ export default function App() {
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
+    
+    let telParaEnvio = editTelefone.replace(/\D/g, '');
+    if (telParaEnvio) {
+       telParaEnvio = (telParaEnvio.startsWith('55') && telParaEnvio.length >= 12) ? telParaEnvio : `55${telParaEnvio}`;
+    }
+
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { 
-        method: 'PUT', 
-        headers: { 'Content-Type': 'application/json' }, 
-        // Agora envia o CPF também (se o backend aceitar, ele grava e bloqueia)
-        body: JSON.stringify({ nome: editNome, telefone: editTelefone, cpf: editCpf }) 
-      });
+      const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: editNome, telefone: telParaEnvio, cpf: editCpf }) });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao atualizar.');
       setAppUser(data.usuario); setProfileSucesso('Perfil atualizado com sucesso!');
@@ -202,38 +268,33 @@ export default function App() {
     setIsProfileLoading(true); setProfileErro('');
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'DELETE' });
-      const data = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(data.erro || 'Erro ao apagar conta.');
-      setAppUser(null); setIsProfileModalOpen(false); alert("Conta apagada permanentemente.");
+      if (!res.ok) throw new Error('Erro ao apagar conta.');
+      setAppUser(null); setIsProfileModalOpen(false); alert("Conta apagada.");
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
   const fetchEnderecos = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`);
-      const data = await res.json();
-      if (res.ok) setEnderecos(data.enderecos || []);
-    } catch (error) { console.error("Erro ao puxar endereços", error); }
+      if (res.ok) setEnderecos((await res.json()).enderecos || []);
+    } catch (error) {}
   };
 
-  // LÓGICA DO VIACEP
   const handleCepChange = async (e) => {
     let val = e.target.value.replace(/\D/g, '');
     let formatado = val;
     if (val.length > 5) formatado = val.replace(/^(\d{5})(\d)/, '$1-$2');
     setEndCep(formatado);
-
     if (val.length === 8) {
       setIsBuscandoCep(true); setProfileErro('');
       try {
         const res = await fetch(`https://viacep.com.br/ws/${val}/json/`);
         const data = await res.json();
-        if (data.erro) { setProfileErro('CEP não encontrado. Preencha manualmente.'); return; }
+        if (data.erro) { setProfileErro('CEP não encontrado.'); return; }
         setEndRua(data.logradouro || ''); setEndBairro(data.bairro || ''); setEndCidade(data.localidade || ''); setEndEstado(data.uf || '');
         document.getElementById('endNumeroInput')?.focus();
         setProfileSucesso('Endereço localizado!');
-      } catch (error) { setProfileErro('Falha ao comunicar com os Correios.'); } 
-      finally { setIsBuscandoCep(false); }
+      } catch (error) { setProfileErro('Falha nos Correios.'); } finally { setIsBuscandoCep(false); }
     }
   };
 
@@ -245,42 +306,40 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao guardar endereço.');
-      setEnderecos([...enderecos, data.endereco]); setProfileSucesso('Endereço adicionado com sucesso!'); setProfileTab('enderecos'); 
+      setEnderecos([...enderecos, data.endereco]); setProfileSucesso('Endereço adicionado!'); setProfileTab('enderecos'); 
       setEndCep(''); setEndRua(''); setEndNumero(''); setEndComplemento(''); setEndBairro(''); setEndCidade(''); setEndEstado('');
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
-  const handleDeleteEndereco = async (id_endereco) => {
+  const handleDeleteEndereco = async (id) => {
     if(!window.confirm('Apagar este endereço?')) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/endereco/${id_endereco}/`, { method: 'DELETE' });
-      if (res.ok) { setEnderecos(enderecos.filter(end => end.id_endereco !== id_endereco)); setProfileSucesso('Endereço apagado.'); }
+      const res = await fetch(`${API_BASE_URL}/auth/endereco/${id}/`, { method: 'DELETE' });
+      if (res.ok) { setEnderecos(enderecos.filter(end => end.id_endereco !== id)); setProfileSucesso('Endereço apagado.'); }
     } catch (error) { setProfileErro('Erro ao apagar endereço.'); }
   };
 
-  // ==========================================
-  // LÓGICA DO PAINEL ADMIN
-  // ==========================================
+  // ADMIN
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); };
   const handleAdminEdit = (produto) => { setAdminErro(''); setAdminProdutoEditing(produto); setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria); setProdImagem(produto.imagem); setAdminTab('formulario'); };
   const handleAdminNew = () => { setAdminErro(''); setAdminProdutoEditing(null); setProdNome(''); setProdPreco(''); setProdCategoria('Nacional'); setProdImagem(''); setAdminTab('formulario'); };
 
   const handleAdminSaveProduct = async (e) => {
-    e.preventDefault();
-    setIsAdminLoading(true); setAdminErro('');
+    e.preventDefault(); setIsAdminLoading(true); setAdminErro('');
     const headers = { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario };
     const payload = { nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria, imagem: prodImagem };
-
     try {
       if (adminProdutoEditing) {
         const res = await fetch(`${API_BASE_URL}/produtos/${adminProdutoEditing.id}/`, { method: 'PUT', headers, body: JSON.stringify(payload) });
-        const data = await res.json().catch(()=>({}));
-        if (!res.ok) throw new Error(data.erro || 'Falha ao atualizar.');
+        if (!res.ok) throw new Error('Falha ao atualizar.');
+        
+        const data = await res.json();
         setProdutos(produtos.map(p => p.id === adminProdutoEditing.id ? data.produto : p));
       } else {
         const res = await fetch(`${API_BASE_URL}/produtos/`, { method: 'POST', headers, body: JSON.stringify(payload) });
-        const data = await res.json().catch(()=>({}));
-        if (!res.ok) throw new Error(data.erro || 'Falha ao criar.');
+        if (!res.ok) throw new Error('Falha ao criar.');
+        
+        const data = await res.json();
         setProdutos([...produtos, data.produto]);
       }
       setAdminTab('lista');
@@ -297,9 +356,7 @@ export default function App() {
     } catch (error) { setAdminErro(error.message); } finally { setIsAdminLoading(false); }
   };
 
-  // ==========================================
-  // CARRINHO E FILTROS
-  // ==========================================
+  // CARRINHO
   const addToCart = (produto, tamanho) => {
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === produto.id && item.tamanho === tamanho);
@@ -389,7 +446,7 @@ export default function App() {
       </main>
 
       {/* ========================================================= */}
-      {/* MODAL DE AUTENTICAÇÃO E LOGIN SOCIAL */}
+      {/* MODAL DE AUTENTICAÇÃO HÍBRIDA (E-MAIL OU WHATSAPP) */}
       {/* ========================================================= */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -403,11 +460,17 @@ export default function App() {
             {authErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authErro}</div>}
             {authMensagem && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg font-medium flex items-start gap-2 border border-blue-100"><Mail className="w-5 h-5 flex-shrink-0" /> <p>{authMensagem}</p></div>}
             
-            {authStep === 'email' && (
-              <form onSubmit={handleCheckEmail} className="space-y-4">
-                <input type="email" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="O seu e-mail de acesso..." />
-                <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-2.5 rounded-lg disabled:opacity-70 hover:bg-slate-800 transition-colors font-medium">
-                  {isAuthLoading ? 'A verificar...' : 'Continuar com E-mail'}
+            {authStep === 'inicio' && (
+              <form onSubmit={handleCheckAuth} className="space-y-4">
+                <div className="relative">
+                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                     <MessageCircle className="h-5 w-5 text-gray-400" />
+                   </div>
+                   <input type="text" required value={authIdentificador} onChange={(e) => setAuthIdentificador(e.target.value)} className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none transition-all" placeholder="E-mail ou WhatsApp (DDD + Número)" />
+                </div>
+                
+                <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-3 rounded-lg disabled:opacity-70 hover:bg-slate-800 transition-colors font-medium">
+                  {isAuthLoading ? 'A verificar...' : 'Continuar com Código Seguro'}
                 </button>
 
                 <div className="relative flex py-2 items-center">
@@ -432,13 +495,15 @@ export default function App() {
 
             {authStep === 'register' && (
               <form onSubmit={handleRegisterFormSubmit} className="space-y-4">
-                <p className="text-sm text-gray-600 mb-2">Parece ser novo por aqui. Preencha os dados abaixo para receber o seu código OTP por e-mail.</p>
+                <p className="text-sm text-gray-600 mb-2">Parece ser novo por aqui. Preencha os dados abaixo para receber o código {authMetodo === 'whatsapp' ? 'por WhatsApp' : 'por E-mail'}.</p>
                 <input type="text" placeholder="Nome Completo" required value={authNome} onChange={(e) => setAuthNome(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                <input type="email" placeholder="E-mail" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none ${authMetodo === 'email' ? 'bg-gray-100 text-gray-500' : ''}`} disabled={authMetodo === 'email'} />
+                <input type="tel" placeholder="Telefone (DDD + Número)" required value={authTelefone} onChange={(e) => setAuthTelefone(e.target.value)} className={`w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none ${authMetodo === 'whatsapp' ? 'bg-gray-100 text-gray-500' : ''}`} disabled={authMetodo === 'whatsapp'} />
                 <input type="text" placeholder="CPF (Apenas números)" required value={authCpf} onChange={(e) => setAuthCpf(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
-                <input type="tel" placeholder="Telefone (Com DDD)" required value={authTelefone} onChange={(e) => setAuthTelefone(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium disabled:opacity-70 hover:bg-green-700 transition-colors mt-2">
-                  {isAuthLoading ? 'A enviar e-mail...' : 'Receber código de acesso'}
+                  {isAuthLoading ? 'A processar...' : 'Receber código de acesso'}
                 </button>
+                <button type="button" onClick={() => setAuthStep('inicio')} className="w-full text-center text-sm text-gray-500 hover:underline mt-2">Voltar</button>
               </form>
             )}
 
@@ -448,7 +513,7 @@ export default function App() {
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-2.5 rounded-lg disabled:opacity-70 font-medium hover:bg-slate-800 transition-colors">
                   {isAuthLoading ? 'A validar...' : 'Confirmar e Entrar'}
                 </button>
-                <button type="button" onClick={() => setAuthStep('email')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar E-mail</button>
+                <button type="button" onClick={() => setAuthStep('inicio')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar Dados</button>
               </form>
             )}
           </div>
@@ -490,24 +555,16 @@ export default function App() {
                         <input type="text" required value={editNome} onChange={(e) => setEditNome(e.target.value)} disabled={isFetchingData || isProfileLoading} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Telefone</label>
-                        <input type="tel" value={editTelefone} onChange={(e) => setEditTelefone(e.target.value)} disabled={isFetchingData || isProfileLoading} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="Opcional" />
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Telefone / WhatsApp</label>
+                        <input type="tel" value={editTelefone} onChange={(e) => setEditTelefone(e.target.value)} disabled={isFetchingData || isProfileLoading} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="DDD + Número" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        {/* NOVO: Verifica se já tem CPF. Se sim, bloqueia. Se não (Google), liberta! */}
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           CPF {appUser.cpf ? '(Bloqueado)' : '(Pendente)'}
                         </label>
-                        <input 
-                          type="text" 
-                          value={editCpf} 
-                          onChange={(e) => setEditCpf(e.target.value)} 
-                          disabled={isFetchingData || isProfileLoading || appUser.cpf} 
-                          placeholder="Apenas números" 
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none ${appUser.cpf ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`} 
-                        />
+                        <input type="text" value={editCpf} onChange={(e) => setEditCpf(e.target.value)} disabled={isFetchingData || isProfileLoading || appUser.cpf} placeholder="Apenas números" className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none ${appUser.cpf ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`} />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-500 mb-1">E-mail (Bloqueado)</label>

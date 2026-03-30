@@ -9,6 +9,7 @@ Nunca envie chaves de API, senhas ou certificados para o repositório
 .env
 .env.*
 .env.local
+settings.py
 firebase-admin-key.json
 -firebase-adminsdk-.json
 *.pem
@@ -94,9 +95,10 @@ macOS
 .AppleDouble
 .LSOverride
 
-Editores de Código (VS Code, IntelliJ, etc)
+Editores de Código (VS Code, IntelliJ, PyCharm, etc)
 
 .vscode/
 .idea/
 *.swp
 *.swo
+*.iml

@@ -1,4 +1,5 @@
 import re
+import os
 import time
 import random
 import uuid
@@ -11,9 +12,11 @@ from rest_framework import status
 from firebase_admin import auth as firebase_auth
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+# IMPORTAÇÃO DO TWILIO
+from twilio.rest import Client
+
 # Importações internas do seu projeto
 from .firebase_config import db
-from .services.whatsapp import enviar_otp_whatsapp
 
 # ==========================================
 # VERIFICAÇÃO DE ADMIN
@@ -44,15 +47,11 @@ class SocialLoginView(APIView):
             if not id_token:
                 return Response({"erro": "Token não fornecido."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Verifica o token com o Firebase Admin SDK
             decoded_token = firebase_auth.verify_id_token(id_token)
             
-            # PROTEÇÃO EXTRA: Tenta extrair o e-mail do token encriptado. 
-            # Se vier vazio (comum no Firebase), utiliza o e-mail capturado pelo React (fallback).
             raw_email = decoded_token.get('email') or fallback_email
             email = raw_email.lower().strip() if raw_email else ""
             
-            # Bloqueia apenas se, mesmo com o fallback, não houver e-mail
             if not email:
                 return Response({
                     "erro": "O seu provedor social não partilhou o e-mail. Por favor, use a opção de entrar com E-mail ou WhatsApp manualmente."
@@ -61,14 +60,11 @@ class SocialLoginView(APIView):
             raw_nome = decoded_token.get('name') or fallback_name
             nome = raw_nome.strip() if raw_nome else 'Utilizador'
             
-            # Procura o utilizador no Firestore
             query = db.collection('usuarios').where(filter=FieldFilter('email', '==', email)).limit(1).get()
             
             if len(query) > 0:
-                # Login de utilizador existente
                 return Response({"mensagem": "Login com sucesso!", "usuario": query[0].to_dict()}, status=status.HTTP_200_OK)
             else:
-                # Registo automático de novo utilizador social
                 id_usuario = int(time.time())
                 novo_usuario = {
                     "id_usuario": id_usuario, 
@@ -81,12 +77,11 @@ class SocialLoginView(APIView):
                 db.collection('usuarios').document(str(id_usuario)).set(novo_usuario)
                 return Response({"mensagem": "Conta criada!", "usuario": novo_usuario}, status=status.HTTP_201_CREATED)
         except Exception as e:
-            # IMPRIME O ERRO REAL NO TERMINAL
             print(f"\n[ERRO CRÍTICO - LOGIN SOCIAL]: {str(e)}\n")
             return Response({"erro": f"Falha na autenticação: {str(e)}"}, status=status.HTTP_401_UNAUTHORIZED)
 
 # ==========================================
-# AUTENTICAÇÃO HÍBRIDA (E-MAIL + WHATSAPP)
+# AUTENTICAÇÃO HÍBRIDA E TWILIO
 # ==========================================
 class CheckAuthView(APIView):
     def post(self, request):
@@ -124,7 +119,6 @@ class SendOTPView(APIView):
 
             otp_code = str(random.randint(100000, 999999))
             
-            # --- DEBUG: SEMPRE IMPRIMIR NO TERMINAL ---
             print("\n" + "="*40)
             print(f"DEBUG OTP - FUTGO")
             print(f"Identificador: {identificador}")
@@ -135,22 +129,60 @@ class SendOTPView(APIView):
 
             if metodo == 'email':
                 try:
-                    send_mail(
-                        'FUTGO! - Código de Acesso', 
-                        f'O seu código é: {otp_code}', 
-                        settings.EMAIL_HOST_USER, 
-                        [identificador], 
-                        fail_silently=False
-                    )
+                    send_mail('FUTGO! - Código de Acesso', f'O seu código é: {otp_code}', settings.EMAIL_HOST_USER, [identificador], fail_silently=False)
                     return Response({"mensagem": "OTP enviado por e-mail!", "otp": otp_code}, status=200)
                 except Exception as e:
                     return Response({"erro": "Falha no envio do e-mail, mas veja o terminal.", "otp": otp_code}, status=200)
                 
             elif metodo == 'whatsapp':
+                # --- INTEGRAÇÃO TWILIO OFICIAL ---
                 try:
-                    enviar_otp_whatsapp(identificador, otp_code)
-                except:
-                    pass 
+                    account_sid = getattr(settings, 'TWILIO_ACCOUNT_SID', os.environ.get('TWILIO_ACCOUNT_SID'))
+                    auth_token = getattr(settings, 'TWILIO_AUTH_TOKEN', os.environ.get('TWILIO_AUTH_TOKEN'))
+                    twilio_number = getattr(settings, 'TWILIO_PHONE_NUMBER', os.environ.get('TWILIO_PHONE_NUMBER'))
+                    content_sid = getattr(settings, 'TWILIO_WHATSAPP_CONTENT_SID', os.environ.get('TWILIO_WHATSAPP_CONTENT_SID'))
+
+                    if account_sid and auth_token and twilio_number:
+                        client = Client(account_sid, auth_token)
+                        
+                        to_number = f"whatsapp:{identificador}" if identificador.startswith('+') else f"whatsapp:+{identificador}"
+                        from_number = f"whatsapp:{twilio_number}" if not str(twilio_number).startswith('whatsapp:') else twilio_number
+                        
+                        is_sandbox = '14155238886' in str(twilio_number)
+
+                        if is_sandbox:
+                            print("⚠️ AVISO: A usar Twilio Sandbox. Forçando template pré-aprovado para evitar erro 63016 (Janela de 24h).")
+                            # A Sandbox só permite mensagens fora das 24h se o texto for EXATAMENTE este:
+                            message = client.messages.create(
+                                body=f"Your FUTGO code is {otp_code}",
+                                from_=from_number,
+                                to=to_number
+                            )
+                        elif content_sid:
+                            import json
+                            message = client.messages.create(
+                                from_=from_number,
+                                to=to_number,
+                                content_sid=content_sid,
+                                content_variables=json.dumps({"1": str(otp_code)})
+                            )
+                        else:
+                            message = client.messages.create(
+                                body=f"⚽ *FUTGO!*\nO seu código de acesso seguro é: *{otp_code}*",
+                                from_=from_number,
+                                to=to_number
+                            )
+                        
+                        # Log melhorado que mostra também o STATUS da mensagem na Twilio
+                        print(f"Twilio enviou o pedido com sucesso! SID: {message.sid} | Status: {message.status}")
+                        if message.error_message:
+                            print(f"Erro reportado pela Twilio: {message.error_message}")
+
+                    else:
+                        print("AVISO: Credenciais Twilio ausentes no settings.py. OTP impresso apenas no terminal.")
+                except Exception as e:
+                    print(f"Erro na Twilio: {str(e)}")
+                    
                 return Response({"mensagem": "OTP gerado!", "otp": otp_code}, status=200)
                     
             return Response({"erro": "Método desconhecido."}, status=400)
@@ -240,7 +272,6 @@ class UserDetailView(APIView):
                 "telefone": re.sub(r'\D', '', str(request.data.get('telefone', ''))),
                 "cpf": re.sub(r'\D', '', str(request.data.get('cpf', '')))
             }
-            # Remove chaves vazias
             update_data = {k: v for k, v in update_data.items() if v}
             
             user_ref.update(update_data)

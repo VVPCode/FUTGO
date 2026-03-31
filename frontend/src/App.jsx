@@ -1,7 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, SearchCode } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-// NOVO: Adicionado o import do signOut
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
@@ -35,18 +34,41 @@ try {
     googleProvider.addScope('profile');
     facebookProvider = new FacebookAuthProvider();
     facebookProvider.addScope('email'); 
-    facebookProvider.setCustomParameters({ auth_type: 'reauthenticate' });
+    
+    facebookProvider.setCustomParameters({ 
+      display: 'popup' 
+    });
+    
     googleProvider.setCustomParameters({ prompt: 'select_account' });
   }
 } catch (error) {
   console.warn("Aviso: Firebase não inicializado. Verifique as chaves de ambiente.");
 }
 
+// --- FUNÇÃO AUXILIAR PARA FORMATAR O WHATSAPP (+55) ---
+const formatarIdentificador = (val) => {
+  if (!val) return '';
+  const str = val.trim();
+  
+  // Se for email, retorna exatamente como está (em minúsculas)
+  if (str.includes('@')) return str.toLowerCase();
+  
+  // Se for WhatsApp, remove tudo o que não for número
+  const numbers = str.replace(/\D/g, '');
+  if (numbers.length === 0) return str;
+  
+  // Se já começar com o DDI do Brasil (55), mantém. Se não, adiciona o 55.
+  if (numbers.startsWith('55')) return numbers;
+  return `55${numbers}`;
+};
+
 export default function App() {
   const [appUser, setAppUser] = useState(null); 
   const [produtos, setProdutos] = useState([]);
   const [isLoadingProdutos, setIsLoadingProdutos] = useState(true);
   
+  const isLoggingInRef = useRef(false);
+
   const [cart, setCart] = useState([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
@@ -103,11 +125,12 @@ export default function App() {
 
     if (firebaseAuth) {
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
-        if (user && !appUser) {
+        if (user && !appUser && !isLoggingInRef.current) {
           try {
             const token = await user.getIdToken();
+            
             const fallbackEmail = user.email || user.providerData[0]?.email || "";
-            if (!fallbackEmail) return;
+            if (!fallbackEmail) return; 
             
             const fallbackName = user.displayName || user.providerData[0]?.displayName || "Utilizador";
 
@@ -146,12 +169,15 @@ export default function App() {
   const handleSocialLogin = async (provider) => {
     if (!firebaseAuth) return setAuthErro("Firebase não configurado.");
     setIsAuthLoading(true); setAuthErro('');
+    isLoggingInRef.current = true;
     try {
       const result = await signInWithPopup(firebaseAuth, provider);
       const token = await result.user.getIdToken();
       
       const fallbackEmail = result.user.email || result.user.providerData[0]?.email || "";
-      if (!fallbackEmail) throw new Error("O provedor não forneceu o seu e-mail real. Verifique as permissões da conta ou use o E-mail/WhatsApp.");
+      if (!fallbackEmail) {
+         throw new Error("O seu provedor não partilhou o seu e-mail real. Verifique as permissões da conta ou use o E-mail/WhatsApp.");
+      }
       
       const fallbackName = result.user.displayName || result.user.providerData[0]?.displayName || "Utilizador";
       
@@ -170,36 +196,59 @@ export default function App() {
       if (error.code === 'auth/account-exists-with-different-credential') setAuthErro("Esta conta já está registada com outro método. Entre com E-mail ou WhatsApp.");
       else if (error.code === 'auth/popup-closed-by-user') setAuthErro("O login social foi cancelado.");
       else setAuthErro(error.message);
-    } finally { setIsAuthLoading(false); }
+    } finally { 
+      setIsAuthLoading(false);
+      isLoggingInRef.current = false;
+    }
   };
 
-  const handleCheckEmail = async (e) => {
+  const handleCheckAuth = async (e) => {
     e.preventDefault();
     if (!authEmail) return;
     setIsAuthLoading(true); setAuthErro(''); setAuthMensagem('');
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/check-email/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }) });
+      // 1. Aplica o formato (adiciona 55 se for WhatsApp)
+      const identificadorFormatado = formatarIdentificador(authEmail);
+      
+      const res = await fetch(`${API_BASE_URL}/auth/check/`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ identificador: identificadorFormatado }) 
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
       
       if (data.existe) { 
         setAuthMode('login'); 
-        await triggerSendOTP(); 
+        await triggerSendOTP(identificadorFormatado, data.metodo); 
       } else { 
         setAuthMode('register'); 
         setAuthStep('register'); 
+        
+        // UX: Se for número de telefone, auto-preenche o campo do telefone no formulário
+        if (!authEmail.includes('@')) {
+          setAuthTelefone(authEmail.replace(/\D/g, ''));
+        }
+        
         setIsAuthLoading(false);
       }
     } catch (error) { setAuthErro(error.message); setIsAuthLoading(false); }
   };
 
-  const triggerSendOTP = async () => {
+  const triggerSendOTP = async (identificadorOverride = null, metodoOverride = null) => {
     setIsAuthLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/auth/send-otp/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail, method: 'email' }) });
+      const iden = identificadorOverride || formatarIdentificador(authEmail);
+      const mtd = metodoOverride || (authEmail.includes('@') ? 'email' : 'whatsapp');
+      
+      const res = await fetch(`${API_BASE_URL}/auth/send-otp/`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ identificador: iden, method: mtd }) 
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || 'Erro ao enviar e-mail.');
-      setAuthMensagem(`Código de acesso enviado para ${authEmail}.`); 
+      if (!res.ok) throw new Error(data.erro || 'Erro ao enviar código.');
+      setAuthMensagem(`Código de acesso enviado para ${iden}.`); 
       setAuthStep('otp');
     } catch (error) { 
       setAuthErro(error.message); 
@@ -221,8 +270,19 @@ export default function App() {
     e.preventDefault();
     setIsAuthLoading(true); setAuthErro('');
     try {
+      const identificadorFormatado = formatarIdentificador(authEmail);
       let endpoint = authMode === 'login' ? '/auth/login/' : '/auth/register/';
-      let payload = authMode === 'login' ? { email: authEmail, otp: authOtp } : { nome: tempUserData.nome, email: authEmail, cpf: tempUserData.cpf, telefone: tempUserData.telefone, otp: authOtp };
+      
+      let payload = authMode === 'login' 
+        ? { identificador: identificadorFormatado, otp: authOtp } 
+        : { 
+            nome: tempUserData.nome, 
+            email: authEmail.includes('@') ? authEmail : '', 
+            cpf: tempUserData.cpf, 
+            telefone: tempUserData.telefone, 
+            identificador: identificadorFormatado, 
+            otp: authOtp 
+          };
       
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
@@ -262,7 +322,6 @@ export default function App() {
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
-  // --- NOVO: Função para SAIR da conta destruindo a sessão do Firebase ---
   const handleLogout = async () => {
     try {
       if (firebaseAuth) {
@@ -275,7 +334,6 @@ export default function App() {
     setIsProfileModalOpen(false);
   };
 
-  // --- CORRIGIDO: Função de apagar conta agora também destrói a sessão ---
   const handleDeleteAccount = async () => {
     setIsProfileLoading(true); setProfileErro('');
     try {
@@ -283,7 +341,6 @@ export default function App() {
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao apagar conta.');
       
-      // Encerra sessão do Firebase para impedir login fantasma
       if (firebaseAuth) {
         await signOut(firebaseAuth);
       }
@@ -516,10 +573,10 @@ export default function App() {
             {authMensagem && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg font-medium flex items-start gap-2 border border-blue-100"><Mail className="w-5 h-5 flex-shrink-0" /> <p>{authMensagem}</p></div>}
             
             {authStep === 'email' && (
-              <form onSubmit={handleCheckEmail} className="space-y-4">
-                <input type="email" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="O seu e-mail de acesso..." />
+              <form onSubmit={handleCheckAuth} className="space-y-4">
+                <input type="text" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="E-mail ou WhatsApp (Ex: 11999999999)" />
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-2.5 rounded-lg disabled:opacity-70 hover:bg-slate-800 transition-colors font-medium">
-                  {isAuthLoading ? 'A verificar conta...' : 'Continuar com E-mail'}
+                  {isAuthLoading ? 'A verificar conta...' : 'Continuar com E-mail / Celular'}
                 </button>
                 
                 <div className="relative flex py-2 items-center">
@@ -544,14 +601,14 @@ export default function App() {
 
             {authStep === 'register' && (
               <form onSubmit={handleRegisterFormSubmit} className="space-y-4">
-                <p className="text-sm text-gray-600 mb-2">Parece ser novo por aqui. Preencha os dados abaixo para receber o seu código OTP por e-mail.</p>
+                <p className="text-sm text-gray-600 mb-2">Parece ser novo por aqui. Preencha os dados abaixo para receber o seu código OTP.</p>
                 <input type="text" placeholder="Nome Completo" required value={authNome} onChange={(e) => setAuthNome(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <input type="text" placeholder="CPF (Apenas números)" required value={authCpf} onChange={(e) => setAuthCpf(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <input type="tel" placeholder="Telefone (Com DDD)" required value={authTelefone} onChange={(e) => setAuthTelefone(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium disabled:opacity-70 hover:bg-green-700 transition-colors mt-2">
-                  {isAuthLoading ? 'A enviar e-mail...' : 'Receber código de acesso'}
+                  {isAuthLoading ? 'A enviar código...' : 'Receber código de acesso'}
                 </button>
-                <button type="button" onClick={() => setAuthStep('email')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar E-mail</button>
+                <button type="button" onClick={() => setAuthStep('email')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar E-mail ou Telefone</button>
               </form>
             )}
 
@@ -561,7 +618,7 @@ export default function App() {
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-slate-900 text-white py-2.5 rounded-lg disabled:opacity-70 font-medium hover:bg-slate-800 transition-colors">
                   {isAuthLoading ? 'A validar...' : 'Confirmar e Entrar'}
                 </button>
-                <button type="button" onClick={() => setAuthStep('email')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar E-mail</button>
+                <button type="button" onClick={() => setAuthStep('email')} className="w-full text-center text-sm text-green-600 hover:underline mt-2">Voltar / Alterar E-mail ou Telefone</button>
               </form>
             )}
           </div>

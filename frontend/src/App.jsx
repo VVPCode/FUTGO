@@ -573,7 +573,7 @@ export default function App() {
             <div className="hidden md:block flex-1 max-w-2xl mx-8">
               <div className="relative">
                 <Search className="absolute inset-y-0 left-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
-                <input type="text" placeholder="Procurar camisolas..." value={busca} onChange={(e) => setBusca(e.target.value)} className="block w-full pl-10 pr-3 py-2 rounded-md bg-slate-800 text-gray-300 focus:bg-white focus:text-gray-900 transition-colors" />
+                <input type="text" placeholder="Procurar camisetas..." value={busca} onChange={(e) => setBusca(e.target.value)} className="block w-full pl-10 pr-3 py-2 rounded-md bg-slate-800 text-gray-300 focus:bg-white focus:text-gray-900 transition-colors" />
               </div>
             </div>
 

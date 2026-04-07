@@ -1,8 +1,14 @@
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # Esta linha é a magia: Diz ao Django para mandar tudo o que começa com /api/ para o nosso ficheiro api/urls.py
+    
     path('api/', include('api.urls')), 
 ]
+
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

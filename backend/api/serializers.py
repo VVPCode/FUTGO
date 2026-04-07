@@ -14,7 +14,6 @@ class RegisterSerializer(serializers.Serializer):
     telefone = serializers.CharField(required=True)
     otp = serializers.CharField(max_length=6, required=True)
 
-# --- NOVO: SERIALIZADOR DE ENDEREÇO ---
 class EnderecoSerializer(serializers.Serializer):
     cep = serializers.CharField(max_length=10, required=True)
     rua = serializers.CharField(max_length=255, required=True)
@@ -28,8 +27,21 @@ class ProdutoSerializer(serializers.Serializer):
     nome_camisa = serializers.CharField(max_length=255, required=True)
     preco = serializers.FloatField(required=True)
     categoria = serializers.CharField(max_length=100, required=True)
-    # A regra de "no mínimo uma imagem" é garantida aqui com required=True
-    imagem = serializers.URLField(required=True, error_messages={
-        'required': 'É obrigatório fornecer no mínimo uma imagem (URL) para o produto.',
-        'invalid': 'Forneça um URL de imagem válido.'
-    })
+    
+    cores = serializers.ListField(child=serializers.CharField(max_length=50), required=False)
+    pais = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    liga = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    tamanhos = serializers.ListField(child=serializers.CharField(), required=False)
+    
+    temporada = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    tipo_uniforme = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    marca = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    genero = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    personalizavel = serializers.BooleanField(default=False, required=False)
+    
+    # NOVO: Agora aceitamos uma lista de imagens
+    imagens = serializers.ListField(
+        child=serializers.CharField(max_length=1000), 
+        required=True,
+        error_messages={'required': 'É obrigatório fornecer no mínimo uma imagem para o produto.'}
+    )

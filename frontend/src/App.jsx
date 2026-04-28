@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-// NOVO: Adicionado QrCode e Barcode da lucide-react
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, QrCode, Barcode } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
@@ -105,14 +104,14 @@ export default function App() {
   const [isBuscandoCep, setIsBuscandoCep] = useState(false);
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState('lista');
+  const [adminTab, setAdminTab] = useState('lista'); 
   const [adminProdutoEditing, setAdminProdutoEditing] = useState(null);
   const [prodNome, setProdNome] = useState('');
   const [prodPreco, setProdPreco] = useState('');
   const [prodCategoria, setProdCategoria] = useState('Nacional');
-  const [prodImagem, setProdImagem] = useState('');
-  const [prodImagensSalvas, setProdImagensSalvas] = useState([]);
-  const [prodNovosArquivos, setProdNovosArquivos] = useState([]);
+  const [prodImagem, setProdImagem] = useState(''); 
+  const [prodImagensSalvas, setProdImagensSalvas] = useState([]); 
+  const [prodNovosArquivos, setProdNovosArquivos] = useState([]); 
   const [prodCores, setProdCores] = useState([]);
   const [prodPais, setProdPais] = useState('');
   const [prodLiga, setProdLiga] = useState('');
@@ -127,24 +126,21 @@ export default function App() {
   const [todosPedidos, setTodosPedidos] = useState([]);
 
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [checkoutStep, setCheckoutStep] = useState(1);
+  const [checkoutStep, setCheckoutStep] = useState(1); 
   const [checkoutData, setCheckoutData] = useState({
-    endereco: null,
-    frete: null,
-    metodoPagamento: 'cartao', // NOVO: Guarda o tipo selecionado
+    endereco: null, 
+    frete: null, 
+    metodoPagamento: 'cartao',
     cartao: { nome: '', numero: '', validade: '', cvv: '', parcelas: 1 }
   });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
- 
-  const [pedidosUsuario, setPedidosUsuario] = useState([]);
-  const [notificacaoInApp, setNotificacaoInApp] = useState(null);
+  
+  const [pedidosUsuario, setPedidosUsuario] = useState([]); 
+  const [notificacaoInApp, setNotificacaoInApp] = useState(null); 
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
-  // ==========================================
-  // LISTENER EM TEMPO REAL DE PEDIDOS & PUSH NOTIFICATIONS
-  // ==========================================
   useEffect(() => {
     if (!appUser || !dbFrontend) return;
     if (appUser.email === 'admin@futgo.com') return;
@@ -156,24 +152,21 @@ export default function App() {
     let isInitialLoad = true;
     const previousStatuses = new Map();
 
-    const q = query(
-      collection(dbFrontend, 'pedidos'),
-      where('id_usuario', '==', Number(appUser.id_usuario))
-    );
+    const q = query(collection(dbFrontend, 'pedidos'), where('id_usuario', '==', Number(appUser.id_usuario)));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const pedidosAtualizados = [];
-     
+      
       snapshot.docChanges().forEach((change) => {
         const pedido = change.doc.data();
-       
+        
         if (change.type === 'added') {
           previousStatuses.set(pedido.id_pedido, pedido.status);
           if (!isInitialLoad) {
             mostrarNotificacao('Pedido Confirmado! ⚽', `O seu pedido ${pedido.id_pedido} foi registado e está em processamento.`);
           }
         }
-       
+        
         if (change.type === 'modified') {
           const oldStatus = previousStatuses.get(pedido.id_pedido);
           if (oldStatus !== pedido.status) {
@@ -186,7 +179,7 @@ export default function App() {
       snapshot.forEach(doc => pedidosAtualizados.push(doc.data()));
       pedidosAtualizados.sort((a, b) => new Date(b.data_pedido) - new Date(a.data_pedido));
       setPedidosUsuario(pedidosAtualizados);
-     
+      
       isInitialLoad = false;
     });
 
@@ -201,16 +194,12 @@ export default function App() {
   }, [notificacaoInApp]);
 
   const mostrarNotificacao = (titulo, mensagem) => {
-    if (Notification.permission === 'granted') {
-      new Notification(titulo, { body: mensagem });
-    }
+    if (Notification.permission === 'granted') { new Notification(titulo, { body: mensagem }); }
     setNotificacaoInApp({ titulo, mensagem, id: Date.now() });
   };
 
-  // ==========================================
   useEffect(() => {
     fetchProdutos();
-
     if (firebaseAuth) {
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
         if (user && !appUser && !isLoggingInRef.current) {
@@ -221,15 +210,8 @@ export default function App() {
             if (!fallbackEmail) return;
             const fallbackName = user.displayName || user.providerData[0]?.displayName || "Utilizador";
 
-            const res = await fetch(`${API_BASE_URL}/auth/social/`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, fallbackEmail, fallbackName })
-            });
-            if (res.ok) {
-              const data = await res.json();
-              setAppUser(data.usuario);
-            }
+            const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
+            if (res.ok) { const data = await res.json(); setAppUser(data.usuario); }
           } catch (e) { console.error("Falha ao recuperar sessão:", e); }
         }
       });
@@ -237,9 +219,7 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => {
-    return () => { prodNovosArquivos.forEach(item => URL.revokeObjectURL(item.preview)); };
-  }, [prodNovosArquivos]);
+  useEffect(() => { return () => { prodNovosArquivos.forEach(item => URL.revokeObjectURL(item.preview)); }; }, [prodNovosArquivos]);
 
   const fetchProdutos = async () => {
     setIsLoadingProdutos(true);
@@ -253,8 +233,7 @@ export default function App() {
 
   const handleSocialLogin = async (provider) => {
     if (!firebaseAuth) return setAuthErro("Firebase não configurado.");
-    setIsAuthLoading(true); setAuthErro('');
-    isLoggingInRef.current = true;
+    setIsAuthLoading(true); setAuthErro(''); isLoggingInRef.current = true;
     try {
       const result = await signInWithPopup(firebaseAuth, provider);
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -262,10 +241,8 @@ export default function App() {
       const fallbackEmail = result.user.email || result.user.providerData[0]?.email || "";
       if (!fallbackEmail) throw new Error("O seu provedor não partilhou o seu e-mail real.");
       const fallbackName = result.user.displayName || result.user.providerData[0]?.displayName || "Utilizador";
-     
-      const res = await fetch(`${API_BASE_URL}/auth/social/`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName })
-      });
+      
+      const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha na sincronização.');
       setAppUser(data.usuario); closeAuthModal();
@@ -282,10 +259,9 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/check/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identificador: identificadorFormatado }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
-     
-      if (data.existe) {
-        setAuthMode('login'); await triggerSendOTP(identificadorFormatado, data.metodo);
-      } else {
+      
+      if (data.existe) { setAuthMode('login'); await triggerSendOTP(identificadorFormatado, data.metodo); } 
+      else {
         setAuthMode('register'); setAuthStep('register');
         if (!authEmail.includes('@')) setAuthTelefone(authEmail.replace(/\D/g, ''));
         setIsAuthLoading(false);
@@ -323,11 +299,11 @@ export default function App() {
       let payload = authMode === 'login'
         ? { identificador: identificadorFormatado, otp: authOtp }
         : { nome: tempUserData.nome, email: authEmail.includes('@') ? authEmail : '', cpf: tempUserData.cpf, telefone: tempUserData.telefone, identificador: identificadorFormatado, otp: authOtp };
-     
+      
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Código inválido.');
-     
+      
       setAppUser(data.usuario); closeAuthModal();
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
@@ -433,51 +409,37 @@ export default function App() {
     setCheckoutLoading(true);
     setCheckoutErro('');
     try {
-      // PREPARA OS DADOS DE PAGAMENTO COM BASE NO MÉTODO SELECIONADO
-      const dadosPagamento = {
-        metodo: checkoutData.metodoPagamento,
-        ...(checkoutData.metodoPagamento === 'cartao' ? checkoutData.cartao : {})
-      };
-
+      const dadosPagamento = { metodo: checkoutData.metodoPagamento, ...(checkoutData.metodoPagamento === 'cartao' ? checkoutData.cartao : {}) };
       const payload = {
         itens: cart.map(i => ({ id: i.id, nome_camisa: i.nome_camisa, tamanho: i.tamanho, quantidade: i.quantidade, preco: i.preco })),
-        endereco_id: checkoutData.endereco.id_endereco,
-        frete: checkoutData.frete,
-        pagamento: dadosPagamento,
-        total: cartTotal + checkoutData.frete.valor
+        endereco_id: checkoutData.endereco.id_endereco, frete: checkoutData.frete, pagamento: dadosPagamento, total: cartTotal + checkoutData.frete.valor
       };
-     
+      
       const res = await fetch(`${API_BASE_URL}/pedidos/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha ao finalizar o pedido.');
-     
+      
       setCart([]); setIsCheckoutOpen(false);
+      
+      // ALERTA ATUALIZADO AQUI
+      alert(`Pedido Realizado com Sucesso!\nO seu número de pedido é: ${data.pedido.id_pedido}\n\nUma simulação de Nota Fiscal (Recibo) foi enviada para o seu e-mail!`);
+      
     } catch (error) { setCheckoutErro(error.message); } finally { setCheckoutLoading(false); }
   };
 
-  const fetchTodosPedidos = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} });
-      if (res.ok) {
-        const data = await res.json();
-        setTodosPedidos(data);
-      }
-    } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); }
+  const fetchTodosPedidos = async () => { 
+    try { 
+      const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} }); 
+      if (res.ok) { const data = await res.json(); setTodosPedidos(data); }
+    } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); } 
   };
 
-  const updatePedidoStatus = async (id_pedido, status) => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/pedidos/${id_pedido}/status/`, {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario},
-        body: JSON.stringify({ status })
-      });
-      if (res.ok) { fetchTodosPedidos(); }
-      else {
-        const data = await res.json();
-        setAdminErro(data.erro || "Falha ao atualizar o status");
-      }
-    } catch(e) { console.error(e); }
+  const updatePedidoStatus = async (id_pedido, status) => { 
+    try { 
+      const res = await fetch(`${API_BASE_URL}/pedidos/${id_pedido}/status/`, { method: 'PUT', headers: {'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario}, body: JSON.stringify({ status }) }); 
+      if (res.ok) { fetchTodosPedidos(); } 
+      else { const data = await res.json(); setAdminErro(data.erro || "Falha ao atualizar o status"); }
+    } catch(e) { console.error(e); } 
   };
 
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); fetchTodosPedidos(); };
@@ -504,7 +466,7 @@ export default function App() {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     const novosItens = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
-    setProdNovosArquivos(prev => [...prev, ...novosItens]); e.target.value = null;
+    setProdNovosArquivos(prev => [...prev, ...novosItens]); e.target.value = null; 
   };
 
   const removerNovaImagem = (index) => { setProdNovosArquivos(prev => { const updated = [...prev]; URL.revokeObjectURL(updated[index].preview); updated.splice(index, 1); return updated; }); };
@@ -552,7 +514,7 @@ export default function App() {
   };
 
   const addToCart = (produto, tamanho) => {
-    const prodId = produto.id || produto.id_produto || produto._id;
+    const prodId = produto.id || produto.id_produto || produto._id; 
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === prodId && item.tamanho === tamanho);
       if (existingItem) return prevCart.map(item => (item.id === prodId && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
@@ -598,12 +560,11 @@ export default function App() {
     });
   }, [filtroCategoria, busca, produtos, filtrosAvancados]);
 
-  // VALIDAÇÃO PARA O BOTÃO FINALIZAR
   const isPagamentoValido = checkoutData.metodoPagamento !== 'cartao' || (checkoutData.metodoPagamento === 'cartao' && checkoutData.cartao.numero && checkoutData.cartao.nome && checkoutData.cartao.validade && checkoutData.cartao.cvv);
 
   return (
     <div className="min-h-screen w-full bg-gray-50 font-sans text-gray-800 flex flex-col relative">
-     
+      
       {/* TOAST NOTIFICATION UI */}
       {notificacaoInApp && (
         <div className="fixed top-20 right-4 z-[100] bg-white border-l-4 border-green-500 shadow-2xl rounded-lg p-4 w-80 flex items-start gap-3 transition-all duration-300">
@@ -632,7 +593,7 @@ export default function App() {
                 <span className="font-bold text-xl tracking-tight hidden sm:block">FUTGO!</span>
               </div>
             </div>
-           
+            
             <div className="hidden md:block flex-1 max-w-2xl mx-8">
               <div className="relative">
                 <Search className="absolute inset-y-0 left-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
@@ -683,7 +644,7 @@ export default function App() {
             ))}
           </div>
         </div>
-       
+        
         {isLoadingProdutos ? (
           <div className="flex flex-col justify-center items-center py-20 text-gray-500 gap-3">
              <Loader2 className="w-8 h-8 animate-spin text-green-600" />
@@ -705,10 +666,10 @@ export default function App() {
               <h3 className="font-bold text-xl text-slate-900">Acesso</h3>
               <button onClick={closeAuthModal} className="text-gray-400 hover:text-gray-600"><X/></button>
             </div>
-           
+            
             {authErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authErro}</div>}
             {authMensagem && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg font-medium flex items-start gap-2 border border-blue-100"><Mail className="w-5 h-5 flex-shrink-0" /> <p>{authMensagem}</p></div>}
-           
+            
             {authStep === 'email' && (
               <form onSubmit={handleCheckAuth} className="space-y-4">
                 <input type="text" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="E-mail ou WhatsApp (Ex: 11999999999)" />
@@ -765,7 +726,7 @@ export default function App() {
               <h3 className="font-bold text-xl text-slate-900 flex items-center gap-2">A Minha Conta</h3>
               <button onClick={() => setIsProfileModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-           
+            
             <div className="flex border-b border-gray-200 bg-white">
               <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
               <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
@@ -775,7 +736,7 @@ export default function App() {
             <div className="p-6 overflow-y-auto">
               {profileErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{profileErro}</div>}
               {profileSucesso && <div className="mb-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg">{profileSucesso}</div>}
-             
+              
               {profileTab === 'dados' && (
                 !isConfirmingDelete ? (
                   <form onSubmit={handleUpdateProfile} className="space-y-4">
@@ -858,7 +819,7 @@ export default function App() {
                           </div>
                           <div className="text-right">
                             <span className="text-xs text-gray-500 flex items-center gap-1 justify-end">
-                              Status
+                              Status 
                               {pedido.pagamento?.metodo && (
                                 <span className="bg-gray-200 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold text-gray-600">
                                   Via {pedido.pagamento.metodo}
@@ -893,7 +854,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsAdminModalOpen(false)} />
           <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
-           
+            
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-slate-900 text-white">
               <h3 className="font-bold text-xl flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-red-500" /> Painel Admin</h3>
               <div className="flex gap-4 items-center">
@@ -933,11 +894,11 @@ export default function App() {
                                 <span className="text-xs text-gray-500 uppercase">{ped.pagamento?.metodo || 'N/A'}</span>
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <select
-                                  value={ped.status}
+                                <select 
+                                  value={ped.status} 
                                   onChange={(e) => updatePedidoStatus(ped.id_pedido, e.target.value)}
                                   className={`px-3 py-1.5 rounded-lg border font-bold text-xs outline-none cursor-pointer ${
-                                    ped.status === 'Entregue' ? 'bg-green-50 text-green-700 border-green-200' :
+                                    ped.status === 'Entregue' ? 'bg-green-50 text-green-700 border-green-200' : 
                                     ped.status === 'Cancelado' ? 'bg-red-50 text-red-700 border-red-200' :
                                     'bg-blue-50 text-blue-700 border-blue-200'
                                   }`}>
@@ -998,7 +959,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label>
                       <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-green-500" placeholder="Ex: Camisa Brasil Titular 2024" />
                     </div>
-                   
+                    
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium mb-1">Preço (R$) *</label>
@@ -1033,7 +994,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Liga</label>
-                        <input type="text" value={prodLiga} onChange={e => setProdLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
+                        <input type="text" value={prodLiga} onChange={e => setLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Marca / Fornecedor</label>
@@ -1077,7 +1038,7 @@ export default function App() {
                     <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
                       <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2"><ImageIcon className="w-5 h-5"/> Imagens do Produto *</label>
                       <p className="text-xs text-blue-700 mb-4">Carregue as imagens a partir do seu computador. A primeira imagem será a capa do produto.</p>
-                     
+                      
                       <div className="mb-4">
                         <label className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
                           <UploadCloud className="w-5 h-5" /> Adicionar Fotos
@@ -1202,7 +1163,7 @@ export default function App() {
                   <h4 className="font-bold text-lg text-gray-800">Onde deseja receber o seu pedido?</h4>
                   {enderecos.length === 0 ? (
                     <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
-                      Você ainda não tem nenhum endereço salvo.
+                      Você ainda não tem nenhum endereço salvo. 
                       <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="mt-2 block font-bold underline">
                         Clique aqui para adicionar um endereço no seu perfil.
                       </button>
@@ -1269,7 +1230,7 @@ export default function App() {
 
                   <div>
                     <h4 className="font-bold text-lg text-gray-800 mb-4">Escolha a Forma de Pagamento</h4>
-                   
+                    
                     {/* Botões de Seleção de Pagamento */}
                     <div className="grid grid-cols-3 gap-3 mb-6">
                       <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'cartao' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
@@ -1335,7 +1296,7 @@ export default function App() {
                   <div className="pt-4 flex justify-between border-t">
                     <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
                     <button onClick={handleFinalizarCompra} disabled={checkoutLoading || !isPagamentoValido} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:opacity-50">
-                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />} 
                       Confirmar Pedido
                     </button>
                   </div>
@@ -1355,9 +1316,9 @@ export default function App() {
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Filter className="w-5 h-5"/> Filtros Refinados</h2>
               <button onClick={() => setIsFilterSidebarOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-           
+            
             <div className="p-4 space-y-6">
-             
+              
               <div className="bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between cursor-pointer" onClick={() => setFiltrosAvancados({...filtrosAvancados, personalizavel: !filtrosAvancados.personalizavel})}>
                 <span className="text-sm font-bold text-green-900">Aceita Personalização</span>
                 <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'bg-green-500' : ''}`}>
@@ -1491,7 +1452,7 @@ export default function App() {
 function ProductCard({ produto, onAdd }) {
   const [tamanho, setTamanho] = useState('M');
   const [imgIndex, setImgIndex] = useState(0);
- 
+  
   const tamanhosDisponiveis = produto.tamanhos && produto.tamanhos.length > 0 ? produto.tamanhos : ['P', 'M', 'G', 'GG'];
   const listaImagens = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
 
@@ -1518,19 +1479,19 @@ function ProductCard({ produto, onAdd }) {
           Personalizável
         </span>
       )}
-     
+      
       <div className="relative w-full h-72 bg-gray-50 flex items-center justify-center">
         {listaImagens.length > 0 ? (
           <img src={listaImagens[imgIndex]} className="w-full h-full object-cover transition-opacity duration-300" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
         ) : (
           <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
         )}
-       
+        
         {listaImagens.length > 1 && (
           <>
             <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
             <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
-           
+            
             <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
               {listaImagens.map((_, idx) => (
                 <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === imgIndex ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />

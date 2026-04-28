@@ -123,12 +123,6 @@ class SendOTPView(APIView):
             otp_code = str(random.randint(100000, 999999))
             db.collection('otps').document(identificador).set({'otp': otp_code, 'timestamp': time.time()})
 
-            print("\n" + "="*50)
-            print(f"🔑 [FUTGO] NOVO CÓDIGO OTP: {otp_code}")
-            print(f"🎯 Destino: {identificador}")
-            print(f"📡 Método:  {metodo.upper()}")
-            print("="*50 + "\n")
-
             if metodo == 'email':
                 try:
                     send_mail('FUTGO! - Código de Acesso', f'O seu código é: {otp_code}', settings.EMAIL_HOST_USER, [identificador], fail_silently=False)
@@ -276,21 +270,12 @@ class ProdutoListView(APIView):
             imagem_principal = imagens_lista[0] if imagens_lista else ""
            
             novo_prod = {
-                "id": id_prod,
-                "nome_camisa": dados.get('nome_camisa', ''),
-                "preco": float(dados.get('preco', 0.0)),
-                "categoria": dados.get('categoria', 'Nacional'),
-                "imagem": imagem_principal,
-                "imagens": imagens_lista,
-                "cores": dados.get('cores', []),
-                "pais": dados.get('pais', ''),
-                "liga": dados.get('liga', ''),
-                "tamanhos": dados.get('tamanhos', ['P', 'M', 'G', 'GG']),
-                "temporada": dados.get('temporada', ''),
-                "tipo_uniforme": dados.get('tipo_uniforme', 'Primeira Camisa'),
-                "marca": dados.get('marca', ''),
-                "genero": dados.get('genero', 'Unissex'),
-                "personalizavel": bool(dados.get('personalizavel', False)),
+                "id": id_prod, "nome_camisa": dados.get('nome_camisa', ''), "preco": float(dados.get('preco', 0.0)),
+                "categoria": dados.get('categoria', 'Nacional'), "imagem": imagem_principal, "imagens": imagens_lista,
+                "cores": dados.get('cores', []), "pais": dados.get('pais', ''), "liga": dados.get('liga', ''),
+                "tamanhos": dados.get('tamanhos', ['P', 'M', 'G', 'GG']), "temporada": dados.get('temporada', ''),
+                "tipo_uniforme": dados.get('tipo_uniforme', 'Primeira Camisa'), "marca": dados.get('marca', ''),
+                "genero": dados.get('genero', 'Unissex'), "personalizavel": bool(dados.get('personalizavel', False)),
                 "data_criacao": datetime.utcnow().isoformat() + "Z"
             }
             db.collection('produtos').document(id_prod).set(novo_prod)
@@ -320,19 +305,16 @@ class ProdutoDetailView(APIView):
         except Exception as e: return Response({"erro": str(e)}, status=500)
 
 # ==========================================
-# NOVAS VIEWS: PEDIDOS (CHECKOUT)
+# GESTÃO DE PEDIDOS (E ENVIO DE NF)
 # ==========================================
 class PedidoCreateView(APIView):
     def post(self, request):
         try:
-            # Verifica se está autenticado usando o cabeçalho X-User-ID que o Frontend envia
             user_id = request.headers.get('X-User-ID')
             if not user_id:
                 return Response({"erro": "Utilizador não autenticado."}, status=401)
            
             dados = request.data
-           
-            # Gera um ID único para o Pedido
             id_pedido = f"PED-{int(time.time())}"
            
             novo_pedido = {
@@ -343,12 +325,83 @@ class PedidoCreateView(APIView):
                 "frete": dados.get('frete', {}),
                 "pagamento": dados.get('pagamento', {}),
                 "total": float(dados.get('total', 0.0)),
-                "status": "Recebido", # Status inicial
+                "status": "Recebido",
                 "data_pedido": datetime.utcnow().isoformat() + "Z"
             }
            
-            # Salva na Firebase
+            # 1. Salva o pedido no Firestore
             db.collection('pedidos').document(id_pedido).set(novo_pedido)
+           
+            # ==========================================
+            # 2. GERAÇÃO E ENVIO DE E-MAIL (SIMULAÇÃO NF)
+            # ==========================================
+            try:
+                # Busca os dados do usuário para obter o e-mail
+                user_doc = db.collection('usuarios').document(str(user_id)).get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    user_email = user_data.get('email', '')
+                    user_nome = user_data.get('nome', 'Cliente')
+                   
+                    if user_email and '@' in user_email:
+                        # Monta a lista de itens comprados em HTML
+                        itens_html = "".join([
+                            f"<tr><td style='padding: 8px; border-bottom: 1px solid #ddd;'>{item['quantidade']}x {item['nome_camisa']} ({item['tamanho']})</td>"
+                            f"<td style='padding: 8px; border-bottom: 1px solid #ddd; text-align: right;'>R$ {float(item['preco']):.2f}</td></tr>"
+                            for item in novo_pedido['itens']
+                        ])
+                       
+                        frete_valor = float(novo_pedido['frete'].get('valor', 0.0))
+                        total_pago = float(novo_pedido['total'])
+                        metodo_pgto = novo_pedido['pagamento'].get('metodo', 'N/A').upper()
+                       
+                        assunto = f"FUTGO! - Confirmação e Recibo do Pedido {id_pedido}"
+                       
+                        # Corpo do E-mail em HTML Bonito (Simulando uma Nota Fiscal Eletrônica)
+                        mensagem_html = f"""
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
+                            <div style="background-color: #0f172a; padding: 20px; text-align: center;">
+                                <h1 style="color: #22c55e; margin: 0; font-size: 24px;">FUTGO!</h1>
+                                <p style="color: #fff; margin: 5px 0 0 0;">Obrigado pela sua compra, {user_nome}!</p>
+                            </div>
+                           
+                            <div style="padding: 20px;">
+                                <h2 style="color: #0f172a; font-size: 18px; border-bottom: 2px solid #22c55e; padding-bottom: 5px;">Recibo Eletrônico (Simulação NF)</h2>
+                                <p><strong>Nº do Pedido:</strong> {id_pedido}</p>
+                                <p><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+                                <p><strong>Forma de Pagamento:</strong> {metodo_pgto}</p>
+                               
+                                <h3 style="margin-top: 20px; font-size: 16px;">Itens do Pedido:</h3>
+                                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                                    {itens_html}
+                                </table>
+                               
+                                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; text-align: right;">
+                                    <p style="margin: 0 0 5px 0;">Subtotal Itens: R$ {(total_pago - frete_valor):.2f}</p>
+                                    <p style="margin: 0 0 5px 0;">Frete: R$ {frete_valor:.2f}</p>
+                                    <p style="margin: 10px 0 0 0; font-size: 18px; font-weight: bold; color: #0f172a;">Total Pago: R$ {total_pago:.2f}</p>
+                                </div>
+                               
+                                <p style="font-size: 12px; color: #666; margin-top: 30px; text-align: center;">
+                                    * Este é um recibo gerado automaticamente para simular a emissão de uma Nota Fiscal. A NF-e oficial seria emitida neste momento em um ambiente de produção.
+                                </p>
+                            </div>
+                        </div>
+                        """
+                       
+                        mensagem_texto = f"Olá {user_nome},\nSeu pedido {id_pedido} foi confirmado.\nTotal: R$ {total_pago:.2f}\nForma de Pagamento: {metodo_pgto}"
+                       
+                        # Envia o E-mail usando o Django Core Mail
+                        send_mail(
+                            subject=assunto,
+                            message=mensagem_texto,
+                            from_email=settings.EMAIL_HOST_USER,
+                            recipient_list=[user_email],
+                            html_message=mensagem_html,
+                            fail_silently=True # True para não quebrar o site se o e-mail não for enviado
+                        )
+            except Exception as e:
+                print(f"Erro no envio da NF por e-mail: {str(e)}")
            
             return Response({"mensagem": "Pedido realizado com sucesso!", "pedido": novo_pedido}, status=201)
         except Exception as e:
@@ -357,56 +410,33 @@ class PedidoCreateView(APIView):
 class PedidoUserListView(APIView):
     def get(self, request, id_usuario):
         try:
-            # Vai buscar todos os pedidos associados a este ID de utilizador
             docs = db.collection('pedidos').where(filter=FieldFilter('id_usuario', '==', int(id_usuario))).get()
             pedidos = [doc.to_dict() for doc in docs]
-           
-            # Ordena do mais recente para o mais antigo
             pedidos.sort(key=lambda x: x.get('data_pedido', ''), reverse=True)
-           
-            return Response(pedidos, status=200)
-        except Exception as e:
-            return Response({"erro": str(e)}, status=500)  
-
-# ==========================================
-# GESTÃO DE PEDIDOS (ADMIN)
-# ==========================================
-class PedidoAdminListView(APIView):
-    def get(self, request):
-        try:
-            # Verifica se o utilizador é admin
-            if not is_admin(request):
-                return Response({"erro": "Acesso negado. Apenas administradores."}, status=403)
-           
-            # Puxa todos os pedidos do Firestore
-            docs = db.collection('pedidos').get()
-            pedidos = [doc.to_dict() for doc in docs]
-           
-            # Ordena do mais recente para o mais antigo
-            pedidos.sort(key=lambda x: x.get('data_pedido', ''), reverse=True)
-           
             return Response(pedidos, status=200)
         except Exception as e:
             return Response({"erro": str(e)}, status=500)
 
+class PedidoAdminListView(APIView):
+    def get(self, request):
+        try:
+            if not is_admin(request): return Response({"erro": "Acesso negado."}, status=403)
+            docs = db.collection('pedidos').get()
+            pedidos = [doc.to_dict() for doc in docs]
+            pedidos.sort(key=lambda x: x.get('data_pedido', ''), reverse=True)
+            return Response(pedidos, status=200)
+        except Exception as e: return Response({"erro": str(e)}, status=500)
+
 class PedidoStatusUpdateView(APIView):
     def put(self, request, id_pedido):
         try:
-            # Verifica se o utilizador é admin
-            if not is_admin(request):
-                return Response({"erro": "Acesso negado."}, status=403)
-           
+            if not is_admin(request): return Response({"erro": "Acesso negado."}, status=403)
             novo_status = request.data.get('status')
-            if not novo_status:
-                return Response({"erro": "O novo status não foi fornecido."}, status=400)
+            if not novo_status: return Response({"erro": "Status não fornecido."}, status=400)
            
             doc_ref = db.collection('pedidos').document(str(id_pedido))
-            if not doc_ref.get().exists:
-                return Response({"erro": "Pedido não encontrado."}, status=404)
-           
-            # Atualiza apenas o campo 'status'
+            if not doc_ref.get().exists: return Response({"erro": "Pedido não encontrado."}, status=404)
             doc_ref.update({"status": novo_status})
            
-            return Response({"mensagem": "Status do pedido atualizado com sucesso!", "status": novo_status}, status=200)
-        except Exception as e:
-            return Response({"erro": str(e)}, status=500)        
+            return Response({"mensagem": "Status atualizado!", "status": novo_status}, status=200)
+        except Exception as e: return Response({"erro": str(e)}, status=500)

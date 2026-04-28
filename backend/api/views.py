@@ -366,4 +366,47 @@ class PedidoUserListView(APIView):
            
             return Response(pedidos, status=200)
         except Exception as e:
+            return Response({"erro": str(e)}, status=500)  
+
+# ==========================================
+# GESTÃO DE PEDIDOS (ADMIN)
+# ==========================================
+class PedidoAdminListView(APIView):
+    def get(self, request):
+        try:
+            # Verifica se o utilizador é admin
+            if not is_admin(request):
+                return Response({"erro": "Acesso negado. Apenas administradores."}, status=403)
+           
+            # Puxa todos os pedidos do Firestore
+            docs = db.collection('pedidos').get()
+            pedidos = [doc.to_dict() for doc in docs]
+           
+            # Ordena do mais recente para o mais antigo
+            pedidos.sort(key=lambda x: x.get('data_pedido', ''), reverse=True)
+           
+            return Response(pedidos, status=200)
+        except Exception as e:
             return Response({"erro": str(e)}, status=500)
+
+class PedidoStatusUpdateView(APIView):
+    def put(self, request, id_pedido):
+        try:
+            # Verifica se o utilizador é admin
+            if not is_admin(request):
+                return Response({"erro": "Acesso negado."}, status=403)
+           
+            novo_status = request.data.get('status')
+            if not novo_status:
+                return Response({"erro": "O novo status não foi fornecido."}, status=400)
+           
+            doc_ref = db.collection('pedidos').document(str(id_pedido))
+            if not doc_ref.get().exists:
+                return Response({"erro": "Pedido não encontrado."}, status=404)
+           
+            # Atualiza apenas o campo 'status'
+            doc_ref.update({"status": novo_status})
+           
+            return Response({"mensagem": "Status do pedido atualizado com sucesso!", "status": novo_status}, status=200)
+        except Exception as e:
+            return Response({"erro": str(e)}, status=500)        

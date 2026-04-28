@@ -10,7 +10,12 @@ from .views import (
     EnderecoDetailView,
     ProdutoListView,
     ProdutoDetailView,
-    UploadImagemView # A nova view para o upload de múltiplas imagens
+    UploadImagemView,
+    PedidoCreateView,
+    PedidoUserListView,
+    # --- NOVAS VIEWS ADMIN ---
+    PedidoAdminListView,
+    PedidoStatusUpdateView
 )
 
 urlpatterns = [
@@ -35,9 +40,21 @@ urlpatterns = [
     # ==========================
     path('produtos/', ProdutoListView.as_view(), name='produto_list'),
     path('produtos/<str:id_produto>/', ProdutoDetailView.as_view(), name='produto_detail'),
-    
+   
     # ==========================
     # ROTA DE UPLOAD DE ARQUIVOS
     # ==========================
     path('upload-imagens/', UploadImagemView.as_view(), name='upload_imagens'),
+
+    # ==========================
+    # ROTAS DE PEDIDOS (CHECKOUT)
+    # ==========================
+    path('pedidos/', PedidoCreateView.as_view(), name='pedido_create'),
+    path('pedidos/user/<int:id_usuario>/', PedidoUserListView.as_view(), name='pedido_user_list'),
+   
+    # ==========================
+    # ROTAS GESTÃO ADMIN DE PEDIDOS
+    # ==========================
+    path('pedidos/admin/', PedidoAdminListView.as_view(), name='pedido_admin_list'),
+    path('pedidos/<str:id_pedido>/status/', PedidoStatusUpdateView.as_view(), name='pedido_status_update'),
 ]

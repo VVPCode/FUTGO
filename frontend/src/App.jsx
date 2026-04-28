@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing } from 'lucide-react';
+// NOVO: Adicionado QrCode e Barcode da lucide-react
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, QrCode, Barcode } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-// NOVO: Importação do Firestore para escuta em tempo real no cliente
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
@@ -30,7 +30,7 @@ try {
   if (firebaseConfig.apiKey) {
     const app = initializeApp(firebaseConfig);
     firebaseAuth = getAuth(app);
-    dbFrontend = getFirestore(app); // Inicializa a DB no Frontend para as notificações
+    dbFrontend = getFirestore(app);
     googleProvider = new GoogleAuthProvider();
     googleProvider.addScope('email');
     googleProvider.addScope('profile');
@@ -129,13 +129,16 @@ export default function App() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState(1);
   const [checkoutData, setCheckoutData] = useState({
-    endereco: null, frete: null, cartao: { nome: '', numero: '', validade: '', cvv: '', parcelas: 1 }
+    endereco: null,
+    frete: null,
+    metodoPagamento: 'cartao', // NOVO: Guarda o tipo selecionado
+    cartao: { nome: '', numero: '', validade: '', cvv: '', parcelas: 1 }
   });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
  
   const [pedidosUsuario, setPedidosUsuario] = useState([]);
-  const [notificacaoInApp, setNotificacaoInApp] = useState(null); // Estado para o Toast
+  const [notificacaoInApp, setNotificacaoInApp] = useState(null);
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
@@ -143,11 +146,9 @@ export default function App() {
   // LISTENER EM TEMPO REAL DE PEDIDOS & PUSH NOTIFICATIONS
   // ==========================================
   useEffect(() => {
-    // Só ativa se o utilizador estiver logado (e não for o admin)
     if (!appUser || !dbFrontend) return;
-    if (appUser.email === 'admin@futgo.com') return; // Opcional: não notificar o admin das compras dele
+    if (appUser.email === 'admin@futgo.com') return;
 
-    // 1. Pede permissão ao navegador para Notificações Nativas
     if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
       Notification.requestPermission();
     }
@@ -155,7 +156,6 @@ export default function App() {
     let isInitialLoad = true;
     const previousStatuses = new Map();
 
-    // Cria a query que vai ficar a "escutar" a BD continuamente
     const q = query(
       collection(dbFrontend, 'pedidos'),
       where('id_usuario', '==', Number(appUser.id_usuario))
@@ -167,7 +167,6 @@ export default function App() {
       snapshot.docChanges().forEach((change) => {
         const pedido = change.doc.data();
        
-        // NOVO PEDIDO CRIADO
         if (change.type === 'added') {
           previousStatuses.set(pedido.id_pedido, pedido.status);
           if (!isInitialLoad) {
@@ -175,7 +174,6 @@ export default function App() {
           }
         }
        
-        // STATUS ALTERADO (Pelo Admin)
         if (change.type === 'modified') {
           const oldStatus = previousStatuses.get(pedido.id_pedido);
           if (oldStatus !== pedido.status) {
@@ -185,7 +183,6 @@ export default function App() {
         }
       });
 
-      // Mantém a lista do Perfil sempre atualizada sem precisar dar F5
       snapshot.forEach(doc => pedidosAtualizados.push(doc.data()));
       pedidosAtualizados.sort((a, b) => new Date(b.data_pedido) - new Date(a.data_pedido));
       setPedidosUsuario(pedidosAtualizados);
@@ -196,7 +193,6 @@ export default function App() {
     return () => unsubscribe();
   }, [appUser]);
 
-  // Gere o tempo do Toast visual na tela
   useEffect(() => {
     if (notificacaoInApp) {
       const timer = setTimeout(() => setNotificacaoInApp(null), 6000);
@@ -205,15 +201,13 @@ export default function App() {
   }, [notificacaoInApp]);
 
   const mostrarNotificacao = (titulo, mensagem) => {
-    // Dispara a Push Notification Nativa do Computador/Telemóvel
     if (Notification.permission === 'granted') {
       new Notification(titulo, { body: mensagem });
     }
-    // Dispara o Toast Visual dentro do Site
     setNotificacaoInApp({ titulo, mensagem, id: Date.now() });
   };
-  // ==========================================
 
+  // ==========================================
   useEffect(() => {
     fetchProdutos();
 
@@ -235,7 +229,6 @@ export default function App() {
             if (res.ok) {
               const data = await res.json();
               setAppUser(data.usuario);
-              // NOTA: Já não precisamos do fetchPedidosUser, o onSnapshot faz isso!
             }
           } catch (e) { console.error("Falha ao recuperar sessão:", e); }
         }
@@ -440,9 +433,18 @@ export default function App() {
     setCheckoutLoading(true);
     setCheckoutErro('');
     try {
+      // PREPARA OS DADOS DE PAGAMENTO COM BASE NO MÉTODO SELECIONADO
+      const dadosPagamento = {
+        metodo: checkoutData.metodoPagamento,
+        ...(checkoutData.metodoPagamento === 'cartao' ? checkoutData.cartao : {})
+      };
+
       const payload = {
         itens: cart.map(i => ({ id: i.id, nome_camisa: i.nome_camisa, tamanho: i.tamanho, quantidade: i.quantidade, preco: i.preco })),
-        endereco_id: checkoutData.endereco.id_endereco, frete: checkoutData.frete, pagamento: checkoutData.cartao, total: cartTotal + checkoutData.frete.valor
+        endereco_id: checkoutData.endereco.id_endereco,
+        frete: checkoutData.frete,
+        pagamento: dadosPagamento,
+        total: cartTotal + checkoutData.frete.valor
       };
      
       const res = await fetch(`${API_BASE_URL}/pedidos/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, body: JSON.stringify(payload) });
@@ -450,7 +452,6 @@ export default function App() {
       if (!res.ok) throw new Error(data.erro || 'Falha ao finalizar o pedido.');
      
       setCart([]); setIsCheckoutOpen(false);
-      // O ALERTA IN-APP E NATIVO VÃO SER DESPOLETADOS AUTOMATICAMENTE PELO useEffect!
     } catch (error) { setCheckoutErro(error.message); } finally { setCheckoutLoading(false); }
   };
 
@@ -597,10 +598,13 @@ export default function App() {
     });
   }, [filtroCategoria, busca, produtos, filtrosAvancados]);
 
+  // VALIDAÇÃO PARA O BOTÃO FINALIZAR
+  const isPagamentoValido = checkoutData.metodoPagamento !== 'cartao' || (checkoutData.metodoPagamento === 'cartao' && checkoutData.cartao.numero && checkoutData.cartao.nome && checkoutData.cartao.validade && checkoutData.cartao.cvv);
+
   return (
     <div className="min-h-screen w-full bg-gray-50 font-sans text-gray-800 flex flex-col relative">
      
-      {/* TOAST NOTIFICATION UI (Mostra dentro da app se o status mudar) */}
+      {/* TOAST NOTIFICATION UI */}
       {notificacaoInApp && (
         <div className="fixed top-20 right-4 z-[100] bg-white border-l-4 border-green-500 shadow-2xl rounded-lg p-4 w-80 flex items-start gap-3 transition-all duration-300">
           <div className="bg-green-100 p-2 rounded-full flex-shrink-0">
@@ -848,10 +852,20 @@ export default function App() {
                     pedidosUsuario.map(pedido => (
                       <div key={pedido.id_pedido} className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
                         <div className="bg-slate-50 px-4 py-3 flex justify-between items-center border-b border-gray-100">
-                          <div><span className="text-xs text-gray-500">Nº Pedido</span><p className="font-mono font-bold text-slate-900">{pedido.id_pedido}</p></div>
+                          <div>
+                            <span className="text-xs text-gray-500">Nº Pedido</span>
+                            <p className="font-mono font-bold text-slate-900">{pedido.id_pedido}</p>
+                          </div>
                           <div className="text-right">
-                            <span className="text-xs text-gray-500">Status</span>
-                            <p className={`font-bold text-sm px-2 py-1 rounded-full ${pedido.status === 'Entregue' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{pedido.status}</p>
+                            <span className="text-xs text-gray-500 flex items-center gap-1 justify-end">
+                              Status
+                              {pedido.pagamento?.metodo && (
+                                <span className="bg-gray-200 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold text-gray-600">
+                                  Via {pedido.pagamento.metodo}
+                                </span>
+                              )}
+                            </span>
+                            <p className={`font-bold text-sm px-2 py-1 rounded-full mt-1 ${pedido.status === 'Entregue' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{pedido.status}</p>
                           </div>
                         </div>
                         <div className="p-4 flex justify-between items-end">
@@ -899,7 +913,7 @@ export default function App() {
                         <tr>
                           <th className="px-4 py-3">ID / Data</th>
                           <th className="px-4 py-3">Cliente (ID)</th>
-                          <th className="px-4 py-3">Total</th>
+                          <th className="px-4 py-3">Total / Pgto</th>
                           <th className="px-4 py-3 text-right">Status</th>
                         </tr>
                       </thead>
@@ -914,7 +928,10 @@ export default function App() {
                                 <span className="text-xs text-gray-500">{new Date(ped.data_pedido).toLocaleString()}</span>
                               </td>
                               <td className="px-4 py-3 text-gray-600 font-mono text-xs">{ped.id_usuario}</td>
-                              <td className="px-4 py-3 font-bold text-slate-900">R$ {ped.total.toFixed(2)}</td>
+                              <td className="px-4 py-3">
+                                <span className="font-bold text-slate-900 block">R$ {ped.total.toFixed(2)}</span>
+                                <span className="text-xs text-gray-500 uppercase">{ped.pagamento?.metodo || 'N/A'}</span>
+                              </td>
                               <td className="px-4 py-3 text-right">
                                 <select
                                   value={ped.status}
@@ -925,6 +942,7 @@ export default function App() {
                                     'bg-blue-50 text-blue-700 border-blue-200'
                                   }`}>
                                   <option value="Recebido">Recebido</option>
+                                  <option value="Aguardando Pagamento">Aguardando Pagamento</option>
                                   <option value="Em Separação">Em Separação</option>
                                   <option value="Enviado">Enviado</option>
                                   <option value="Entregue">Entregue</option>
@@ -1015,7 +1033,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Liga</label>
-                        <input type="text" value={prodLiga} onChange={e => setLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
+                        <input type="text" value={prodLiga} onChange={e => setProdLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Marca / Fornecedor</label>
@@ -1240,6 +1258,7 @@ export default function App() {
 
               {checkoutStep === 3 && (
                 <div className="space-y-6">
+                  {/* Resumo */}
                   <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex items-center justify-between">
                     <div>
                       <p className="text-sm text-blue-800 font-medium">Resumo do Pedido (Itens + Frete)</p>
@@ -1249,29 +1268,75 @@ export default function App() {
                   </div>
 
                   <div>
-                    <h4 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5"/> Pagamento com Cartão</h4>
-                    <div className="space-y-4">
-                      <div><label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label><input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" /></div>
-                      <div><label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label><input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" /></div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label><input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" /></div>
-                        <div><label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label><input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" /></div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700">Parcelamento</label>
-                        <select value={checkoutData.cartao.parcelas} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, parcelas: e.target.value}})} className="w-full px-4 py-2 border rounded-lg">
-                          <option value={1}>1x de R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)} sem juros</option>
-                          <option value={2}>2x de R$ {((cartTotal + checkoutData.frete.valor)/2).toFixed(2)} sem juros</option>
-                          <option value={3}>3x de R$ {((cartTotal + checkoutData.frete.valor)/3).toFixed(2)} sem juros</option>
-                        </select>
-                      </div>
+                    <h4 className="font-bold text-lg text-gray-800 mb-4">Escolha a Forma de Pagamento</h4>
+                   
+                    {/* Botões de Seleção de Pagamento */}
+                    <div className="grid grid-cols-3 gap-3 mb-6">
+                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'cartao' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
+                        <CreditCard className="w-6 h-6 mb-2" />
+                        <span className="text-sm font-bold">Cartão</span>
+                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'cartao'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'cartao'})} />
+                      </label>
+
+                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'pix' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
+                        <QrCode className="w-6 h-6 mb-2" />
+                        <span className="text-sm font-bold">PIX</span>
+                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'pix'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'pix'})} />
+                      </label>
+
+                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'boleto' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
+                        <Barcode className="w-6 h-6 mb-2" />
+                        <span className="text-sm font-bold">Boleto</span>
+                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'boleto'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'boleto'})} />
+                      </label>
                     </div>
+
+                    {/* Vistas Condicionais de Pagamento */}
+                    {checkoutData.metodoPagamento === 'cartao' && (
+                      <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label><input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" /></div>
+                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label><input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" /></div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div><label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label><input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" /></div>
+                          <div><label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label><input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" /></div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1 text-gray-700">Parcelamento</label>
+                          <select value={checkoutData.cartao.parcelas} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, parcelas: e.target.value}})} className="w-full px-4 py-2 border rounded-lg">
+                            <option value={1}>1x de R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)} sem juros</option>
+                            <option value={2}>2x de R$ {((cartTotal + checkoutData.frete.valor)/2).toFixed(2)} sem juros</option>
+                            <option value={3}>3x de R$ {((cartTotal + checkoutData.frete.valor)/3).toFixed(2)} sem juros</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {checkoutData.metodoPagamento === 'pix' && (
+                      <div className="bg-white border-2 border-dashed border-gray-300 rounded-lg p-6 text-center space-y-4 animate-in fade-in zoom-in-95 duration-300">
+                        <div className="bg-gray-100 p-4 rounded-2xl inline-block shadow-inner">
+                           <QrCode className="w-24 h-24 text-gray-800 mx-auto" />
+                        </div>
+                        <p className="text-sm text-gray-600 max-w-sm mx-auto">Ao confirmar o pedido, um <strong>código "Copia e Cola"</strong> e um <strong>QR Code</strong> serão gerados para o pagamento.</p>
+                        <div className="bg-green-100 text-green-800 px-4 py-2 rounded-full text-xs font-bold inline-block mt-2">
+                           ⚡ Aprovação Imediata
+                        </div>
+                      </div>
+                    )}
+
+                    {checkoutData.metodoPagamento === 'boleto' && (
+                      <div className="bg-white border-2 border-dashed border-gray-300 rounded-lg p-6 text-center space-y-4 animate-in fade-in zoom-in-95 duration-300">
+                        <Barcode className="w-24 h-24 mx-auto text-gray-400" />
+                        <p className="text-sm text-gray-600 max-w-sm mx-auto">O seu boleto será gerado após clicar no botão abaixo. Pode imprimi-lo ou pagar pelo site do seu banco.</p>
+                        <p className="text-xs text-gray-400 font-bold">Prazo de compensação: até 3 dias úteis.</p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="pt-4 flex justify-between border-t">
                     <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
-                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading || !checkoutData.cartao.numero} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:opacity-50">
-                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />} Confirmar Pagamento
+                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading || !isPagamentoValido} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:opacity-50">
+                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                      Confirmar Pedido
                     </button>
                   </div>
                 </div>

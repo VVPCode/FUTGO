@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-// IMPORTANTE: Adicionados Truck, Box, CreditCard, CheckCircle
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
@@ -83,7 +82,7 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [profileTab, setProfileTab] = useState('dados'); // Adicionado depois: 'pedidos'
+  const [profileTab, setProfileTab] = useState('dados');
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
   const [editCpf, setEditCpf] = useState('');
@@ -103,15 +102,18 @@ export default function App() {
   const [endEstado, setEndEstado] = useState('');
   const [isBuscandoCep, setIsBuscandoCep] = useState(false);
 
+  // ==========================================
+  // ESTADOS ADMIN (AGORA INCLUI PEDIDOS)
+  // ==========================================
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState('lista');
+  const [adminTab, setAdminTab] = useState('lista'); // 'lista', 'formulario', 'pedidos'
   const [adminProdutoEditing, setAdminProdutoEditing] = useState(null);
   const [prodNome, setProdNome] = useState('');
   const [prodPreco, setProdPreco] = useState('');
   const [prodCategoria, setProdCategoria] = useState('Nacional');
-  const [prodImagem, setProdImagem] = useState('');
-  const [prodImagensSalvas, setProdImagensSalvas] = useState([]);
-  const [prodNovosArquivos, setProdNovosArquivos] = useState([]);
+  const [prodImagem, setProdImagem] = useState(''); 
+  const [prodImagensSalvas, setProdImagensSalvas] = useState([]); 
+  const [prodNovosArquivos, setProdNovosArquivos] = useState([]); 
   const [prodCores, setProdCores] = useState([]);
   const [prodPais, setProdPais] = useState('');
   const [prodLiga, setProdLiga] = useState('');
@@ -123,12 +125,10 @@ export default function App() {
   const [prodPersonalizavel, setProdPersonalizavel] = useState(false);
   const [adminErro, setAdminErro] = useState('');
   const [isAdminLoading, setIsAdminLoading] = useState(false);
+  const [todosPedidos, setTodosPedidos] = useState([]); // <-- NOVO: Lista de Pedidos para o Admin
 
-  // ==========================================
-  // NOVOS ESTADOS: CHECKOUT E PEDIDOS
-  // ==========================================
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [checkoutStep, setCheckoutStep] = useState(1);
+  const [checkoutStep, setCheckoutStep] = useState(1); 
   const [checkoutData, setCheckoutData] = useState({
     endereco: null,
     frete: null,
@@ -136,7 +136,7 @@ export default function App() {
   });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
-  const [pedidosUsuario, setPedidosUsuario] = useState([]); // Histórico do utilizador
+  const [pedidosUsuario, setPedidosUsuario] = useState([]); 
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
@@ -161,7 +161,6 @@ export default function App() {
             if (res.ok) {
               const data = await res.json();
               setAppUser(data.usuario);
-              // Assim que logar, também pode puxar os pedidos
               fetchPedidosUser(data.usuario.id_usuario);
             }
           } catch (e) {
@@ -189,7 +188,6 @@ export default function App() {
     finally { setIsLoadingProdutos(false); }
   };
 
-  // Puxa histórico de pedidos para o perfil
   const fetchPedidosUser = async (userId) => {
     if (!userId) return;
     try {
@@ -214,14 +212,14 @@ export default function App() {
       const fallbackEmail = result.user.email || result.user.providerData[0]?.email || "";
       if (!fallbackEmail) throw new Error("O seu provedor não partilhou o seu e-mail real.");
       const fallbackName = result.user.displayName || result.user.providerData[0]?.displayName || "Utilizador";
-     
+      
       const res = await fetch(`${API_BASE_URL}/auth/social/`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha na sincronização.');
-      setAppUser(data.usuario);
-      fetchPedidosUser(data.usuario.id_usuario); // Puxa histórico de compras
+      setAppUser(data.usuario); 
+      fetchPedidosUser(data.usuario.id_usuario);
       closeAuthModal();
     } catch (error) { setAuthErro(error.message); }
     finally { setIsAuthLoading(false); isLoggingInRef.current = false; }
@@ -236,7 +234,7 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/check/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identificador: identificadorFormatado }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
-     
+      
       if (data.existe) {
         setAuthMode('login'); await triggerSendOTP(identificadorFormatado, data.metodo);
       } else {
@@ -277,12 +275,12 @@ export default function App() {
       let payload = authMode === 'login'
         ? { identificador: identificadorFormatado, otp: authOtp }
         : { nome: tempUserData.nome, email: authEmail.includes('@') ? authEmail : '', cpf: tempUserData.cpf, telefone: tempUserData.telefone, identificador: identificadorFormatado, otp: authOtp };
-     
+      
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Código inválido.');
-     
-      setAppUser(data.usuario);
+      
+      setAppUser(data.usuario); 
       fetchPedidosUser(data.usuario.id_usuario);
       closeAuthModal();
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
@@ -337,7 +335,7 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/enderecos/`);
       const data = await res.json();
       if (res.ok) setEnderecos(data.enderecos || []);
-    } catch (error) { console.error("Erro endereços", error); }
+    } catch (error) {}
   };
 
   const handleCepChange = async (e) => {
@@ -379,76 +377,78 @@ export default function App() {
     } catch (error) { setProfileErro('Erro ao apagar.'); }
   };
 
-  // ==========================================
-  // FUNÇÕES DO CHECKOUT
-  // ==========================================
   const handleIniciarCheckout = () => {
-    // 1. Fechar o carrinho para não sobrepor janelas
     setIsCartOpen(false);
-
-    // 2. Se não estiver logado, obriga a fazer o Login
     if (!appUser) {
       setIsAuthModalOpen(true);
       return;
     }
-
-    // 3. Se estiver logado, garante que temos os endereços carregados e abre o Checkout Modal
     if (enderecos.length === 0) fetchEnderecos();
-   
     setIsCheckoutOpen(true);
-    setCheckoutStep(1); // Começa sempre no Passo 1
+    setCheckoutStep(1); 
     setCheckoutErro('');
   };
 
   const handleFinalizarCompra = async () => {
     setCheckoutLoading(true);
     setCheckoutErro('');
-   
     try {
-      // Monta o Payload para enviar à API
       const payload = {
-        itens: cart.map(i => ({
-          id: i.id,
-          nome_camisa: i.nome_camisa,
-          tamanho: i.tamanho,
-          quantidade: i.quantidade,
-          preco: i.preco
-        })),
-        endereco_id: checkoutData.endereco.id_endereco,
-        frete: checkoutData.frete,
-        pagamento: checkoutData.cartao, // Simplificação. No mundo real, enviaria apenas o token do cartão.
-        total: cartTotal + checkoutData.frete.valor
+        itens: cart.map(i => ({ id: i.id, nome_camisa: i.nome_camisa, tamanho: i.tamanho, quantidade: i.quantidade, preco: i.preco })),
+        endereco_id: checkoutData.endereco.id_endereco, frete: checkoutData.frete, pagamento: checkoutData.cartao, total: cartTotal + checkoutData.frete.valor
       };
-     
-      const res = await fetch(`${API_BASE_URL}/pedidos/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-ID': appUser.id_usuario // Muito Importante para o backend saber quem é o comprador
-        },
-        body: JSON.stringify(payload)
-      });
-     
+      
+      const res = await fetch(`${API_BASE_URL}/pedidos/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha ao finalizar o pedido.');
-     
-      // Sucesso!
-      setCart([]); // Esvazia o carrinho
-      setIsCheckoutOpen(false); // Fecha o modal
+      
+      setCart([]); setIsCheckoutOpen(false);
       alert(`Pedido Realizado com Sucesso!\nO seu número de pedido é: ${data.pedido.id_pedido}`);
-     
-      // Atualiza o histórico de pedidos no perfil
       fetchPedidosUser(appUser.id_usuario);
-     
-    } catch (error) {
-      setCheckoutErro(error.message);
-    } finally {
-      setCheckoutLoading(false);
-    }
+    } catch (error) { setCheckoutErro(error.message); } finally { setCheckoutLoading(false); }
   };
 
+  // ==========================================
+  // LÓGICA DO ADMIN: PEDIDOS E PRODUTOS
+  // ==========================================
 
-  const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); };
+  // Função para puxar TODOS os pedidos do sistema
+  const fetchTodosPedidos = async () => { 
+    try { 
+      const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} }); 
+      if (res.ok) {
+        const data = await res.json();
+        setTodosPedidos(data); 
+      }
+    } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); } 
+  };
+
+  // Função para atualizar o status de um pedido
+  const updatePedidoStatus = async (id_pedido, status) => { 
+    try { 
+      const res = await fetch(`${API_BASE_URL}/pedidos/${id_pedido}/status/`, { 
+        method: 'PUT', 
+        headers: {'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario}, 
+        body: JSON.stringify({ status }) 
+      }); 
+      if (res.ok) {
+        // Atualiza a tabela chamando a API de novo
+        fetchTodosPedidos(); 
+      } else {
+        const data = await res.json();
+        setAdminErro(data.erro || "Falha ao atualizar o status");
+      }
+    } catch(e) { console.error(e); } 
+  };
+
+  // Abre o Modal de Admin e puxa os pedidos logo
+  const openAdminModal = () => { 
+    setAdminTab('lista'); 
+    setIsAdminModalOpen(true); 
+    setAdminErro(''); 
+    setIsAdminLoading(false); 
+    fetchTodosPedidos(); // Puxa logo os pedidos
+  };
 
   const handleAdminEdit = (produto) => {
     setAdminErro(''); setAdminProdutoEditing(produto);
@@ -456,12 +456,8 @@ export default function App() {
     setProdCores(produto.cores || []); setProdPais(produto.pais || ''); setProdLiga(produto.liga || ''); setProdTamanhos(produto.tamanhos || ['P', 'M', 'G', 'GG']);
     setProdTemporada(produto.temporada || ''); setProdTipo(produto.tipo_uniforme || 'Primeira Camisa'); setProdMarca(produto.marca || '');
     setProdGenero(produto.genero || 'Unissex'); setProdPersonalizavel(produto.personalizavel || false);
-   
     const imagensExistentes = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
-    setProdImagensSalvas(imagensExistentes);
-    setProdNovosArquivos([]);
-
-    setAdminTab('formulario');
+    setProdImagensSalvas(imagensExistentes); setProdNovosArquivos([]); setAdminTab('formulario');
   };
 
   const handleAdminNew = () => {
@@ -469,81 +465,34 @@ export default function App() {
     setProdNome(''); setProdPreco(''); setProdCategoria('Nacional'); setProdImagem('');
     setProdCores([]); setProdPais(''); setProdLiga(''); setProdTamanhos(['P', 'M', 'G', 'GG']);
     setProdTemporada(''); setProdTipo('Primeira Camisa'); setProdMarca(''); setProdGenero('Unissex'); setProdPersonalizavel(false);
-   
-    setProdImagensSalvas([]);
-    setProdNovosArquivos([]);
-
-    setAdminTab('formulario');
+    setProdImagensSalvas([]); setProdNovosArquivos([]); setAdminTab('formulario');
   };
 
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     const novosItens = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
-    setProdNovosArquivos(prev => [...prev, ...novosItens]);
-    e.target.value = null;
+    setProdNovosArquivos(prev => [...prev, ...novosItens]); e.target.value = null; 
   };
 
-  const removerNovaImagem = (index) => {
-    setProdNovosArquivos(prev => {
-      const updated = [...prev];
-      URL.revokeObjectURL(updated[index].preview);
-      updated.splice(index, 1);
-      return updated;
-    });
-  };
-
-  const removerImagemSalva = (index) => {
-    setProdImagensSalvas(prev => {
-      const updated = [...prev];
-      updated.splice(index, 1);
-      return updated;
-    });
-  };
+  const removerNovaImagem = (index) => { setProdNovosArquivos(prev => { const updated = [...prev]; URL.revokeObjectURL(updated[index].preview); updated.splice(index, 1); return updated; }); };
+  const removerImagemSalva = (index) => { setProdImagensSalvas(prev => { const updated = [...prev]; updated.splice(index, 1); return updated; }); };
 
   const handleAdminSaveProduct = async (e) => {
     e.preventDefault();
-
-    if (prodImagensSalvas.length === 0 && prodNovosArquivos.length === 0 && !prodImagem) {
-      setAdminErro('É obrigatório adicionar pelo menos uma imagem.');
-      return;
-    }
-
-    setIsAdminLoading(true); setAdminErro('');
-    let urlsFinais = [...prodImagensSalvas];
-
+    if (prodImagensSalvas.length === 0 && prodNovosArquivos.length === 0 && !prodImagem) { setAdminErro('É obrigatório adicionar pelo menos uma imagem.'); return; }
+    setIsAdminLoading(true); setAdminErro(''); let urlsFinais = [...prodImagensSalvas];
     try {
       if (prodNovosArquivos.length > 0) {
-        const formData = new FormData();
-        prodNovosArquivos.forEach(item => {
-          formData.append('imagens', item.file);
-        });
-
-        const uploadRes = await fetch(`${API_BASE_URL}/upload-imagens/`, {
-          method: 'POST',
-          headers: { 'X-User-ID': appUser.id_usuario },
-          body: formData
-        });
-
+        const formData = new FormData(); prodNovosArquivos.forEach(item => { formData.append('imagens', item.file); });
+        const uploadRes = await fetch(`${API_BASE_URL}/upload-imagens/`, { method: 'POST', headers: { 'X-User-ID': appUser.id_usuario }, body: formData });
         const uploadData = await uploadRes.json();
         if (!uploadRes.ok) throw new Error(uploadData.erro || 'Falha ao guardar os ficheiros no servidor.');
-
         urlsFinais = [...urlsFinais, ...uploadData.urls];
       }
-
-      if(urlsFinais.length === 0 && prodImagem) {
-        urlsFinais = [prodImagem];
-      }
-
+      if(urlsFinais.length === 0 && prodImagem) urlsFinais = [prodImagem];
       const headers = { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario };
-      const payload = {
-        nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria,
-        imagem: urlsFinais[0] || prodImagem,
-        imagens: urlsFinais,
-        cores: prodCores, pais: prodPais.trim().toLowerCase(), liga: prodLiga.trim().toLowerCase(), tamanhos: prodTamanhos,
-        temporada: prodTemporada.trim(), tipo_uniforme: prodTipo, marca: prodMarca.trim().toLowerCase(), genero: prodGenero, personalizavel: prodPersonalizavel
-      };
-
+      const payload = { nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria, imagem: urlsFinais[0] || prodImagem, imagens: urlsFinais, cores: prodCores, pais: prodPais.trim().toLowerCase(), liga: prodLiga.trim().toLowerCase(), tamanhos: prodTamanhos, temporada: prodTemporada.trim(), tipo_uniforme: prodTipo, marca: prodMarca.trim().toLowerCase(), genero: prodGenero, personalizavel: prodPersonalizavel };
       if (adminProdutoEditing) {
         const res = await fetch(`${API_BASE_URL}/produtos/${adminProdutoEditing.id}/`, { method: 'PUT', headers, body: JSON.stringify(payload) });
         const data = await res.json().catch(()=>({}));
@@ -571,7 +520,7 @@ export default function App() {
   };
 
   const addToCart = (produto, tamanho) => {
-    const prodId = produto.id || produto.id_produto || produto._id;
+    const prodId = produto.id || produto.id_produto || produto._id; 
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === prodId && item.tamanho === tamanho);
       if (existingItem) return prevCart.map(item => (item.id === prodId && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
@@ -586,35 +535,23 @@ export default function App() {
 
   const opcoesFiltro = useMemo(() => {
     return {
-      cores: [...new Set(produtos.flatMap(p => p.cores || []))],
-      paises: [...new Set(produtos.map(p => p.pais).filter(Boolean))],
-      ligas: [...new Set(produtos.map(p => p.liga).filter(Boolean))],
-      temporadas: [...new Set(produtos.map(p => p.temporada).filter(Boolean))],
-      tipos: [...new Set(produtos.map(p => p.tipo_uniforme).filter(Boolean))],
-      marcas: [...new Set(produtos.map(p => p.marca).filter(Boolean))],
+      cores: [...new Set(produtos.flatMap(p => p.cores || []))], paises: [...new Set(produtos.map(p => p.pais).filter(Boolean))],
+      ligas: [...new Set(produtos.map(p => p.liga).filter(Boolean))], temporadas: [...new Set(produtos.map(p => p.temporada).filter(Boolean))],
+      tipos: [...new Set(produtos.map(p => p.tipo_uniforme).filter(Boolean))], marcas: [...new Set(produtos.map(p => p.marca).filter(Boolean))],
       generos: [...new Set(produtos.map(p => p.genero).filter(Boolean))]
     };
   }, [produtos]);
 
-  const toggleFiltroArray = (tipo, valor) => {
-    setFiltrosAvancados(prev => {
-      const arrayAtual = prev[tipo];
-      const novoArray = arrayAtual.includes(valor) ? arrayAtual.filter(item => item !== valor) : [...arrayAtual, valor];
-      return { ...prev, [tipo]: novoArray };
-    });
-  };
+  const toggleFiltroArray = (tipo, valor) => { setFiltrosAvancados(prev => { const arrayAtual = prev[tipo]; const novoArray = arrayAtual.includes(valor) ? arrayAtual.filter(item => item !== valor) : [...arrayAtual, valor]; return { ...prev, [tipo]: novoArray }; }); };
 
   const produtosFiltrados = useMemo(() => {
     const termosBusca = busca.toLowerCase().trim().split(/\s+/);
-
     return produtos.filter(p => {
       const matchCategoria = filtroCategoria === "Todas" || p.categoria === filtroCategoria;
       if (!matchCategoria) return false;
-     
       if (filtrosAvancados.precoMin && Number(p.preco) < Number(filtrosAvancados.precoMin)) return false;
       if (filtrosAvancados.precoMax && Number(p.preco) > Number(filtrosAvancados.precoMax)) return false;
       if (filtrosAvancados.personalizavel && !p.personalizavel) return false;
-     
       if (filtrosAvancados.cores.length > 0 && (!p.cores || !filtrosAvancados.cores.some(c => p.cores.includes(c)))) return false;
       if (filtrosAvancados.paises.length > 0 && !filtrosAvancados.paises.includes(p.pais)) return false;
       if (filtrosAvancados.ligas.length > 0 && !filtrosAvancados.ligas.includes(p.liga)) return false;
@@ -622,20 +559,9 @@ export default function App() {
       if (filtrosAvancados.tipos.length > 0 && !filtrosAvancados.tipos.includes(p.tipo_uniforme)) return false;
       if (filtrosAvancados.marcas.length > 0 && !filtrosAvancados.marcas.includes(p.marca)) return false;
       if (filtrosAvancados.generos.length > 0 && !filtrosAvancados.generos.includes(p.genero)) return false;
-     
-      if (filtrosAvancados.tamanhos.length > 0) {
-        const pTamanhos = p.tamanhos || ['P', 'M', 'G', 'GG'];
-        if (!filtrosAvancados.tamanhos.some(t => pTamanhos.includes(t))) return false;
-      }
-
+      if (filtrosAvancados.tamanhos.length > 0) { const pTamanhos = p.tamanhos || ['P', 'M', 'G', 'GG']; if (!filtrosAvancados.tamanhos.some(t => pTamanhos.includes(t))) return false; }
       if (termosBusca.length === 0 || termosBusca[0] === "") return true;
-
-      const atributosDaCamisola = `
-        ${p.nome_camisa || ''} ${p.categoria || ''} ${p.preco || ''}
-        ${(p.cores || []).join(' ')} ${p.pais || ''} ${p.liga || ''}
-        ${p.temporada || ''} ${p.tipo_uniforme || ''} ${p.marca || ''}
-      `.toLowerCase();
-
+      const atributosDaCamisola = `${p.nome_camisa || ''} ${p.categoria || ''} ${p.preco || ''} ${(p.cores || []).join(' ')} ${p.pais || ''} ${p.liga || ''} ${p.temporada || ''} ${p.tipo_uniforme || ''} ${p.marca || ''}`.toLowerCase();
       return termosBusca.every(termo => atributosDaCamisola.includes(termo));
     });
   }, [filtroCategoria, busca, produtos, filtrosAvancados]);
@@ -645,7 +571,7 @@ export default function App() {
       <nav className="bg-slate-900 text-white sticky top-0 z-40 shadow-md w-full">
         <div className="w-full max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-           
+            
             <div className="flex items-center gap-4">
               <button onClick={() => setIsFilterSidebarOpen(true)} className="p-2 -ml-2 text-gray-300 hover:text-white transition-colors" title="Filtros Avançados">
                 <Menu className="w-6 h-6" />
@@ -655,7 +581,7 @@ export default function App() {
                 <span className="font-bold text-xl tracking-tight hidden sm:block">FUTGO!</span>
               </div>
             </div>
-           
+            
             <div className="hidden md:block flex-1 max-w-2xl mx-8">
               <div className="relative">
                 <Search className="absolute inset-y-0 left-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
@@ -706,7 +632,7 @@ export default function App() {
             ))}
           </div>
         </div>
-       
+        
         {isLoadingProdutos ? (
           <div className="flex flex-col justify-center items-center py-20 text-gray-500 gap-3">
              <Loader2 className="w-8 h-8 animate-spin text-green-600" />
@@ -721,17 +647,17 @@ export default function App() {
 
       {/* MODAL DE LOGIN */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-60 transition-opacity" onClick={closeAuthModal} />
           <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden z-50 p-6">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-xl text-slate-900">Acesso</h3>
               <button onClick={closeAuthModal} className="text-gray-400 hover:text-gray-600"><X/></button>
             </div>
-           
+            
             {authErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authErro}</div>}
             {authMensagem && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg font-medium flex items-start gap-2 border border-blue-100"><Mail className="w-5 h-5 flex-shrink-0" /> <p>{authMensagem}</p></div>}
-           
+            
             {authStep === 'email' && (
               <form onSubmit={handleCheckAuth} className="space-y-4">
                 <input type="text" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="E-mail ou WhatsApp (Ex: 11999999999)" />
@@ -788,7 +714,7 @@ export default function App() {
               <h3 className="font-bold text-xl text-slate-900 flex items-center gap-2">A Minha Conta</h3>
               <button onClick={() => setIsProfileModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-           
+            
             <div className="flex border-b border-gray-200 bg-white">
               <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
               <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
@@ -798,7 +724,7 @@ export default function App() {
             <div className="p-6 overflow-y-auto">
               {profileErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{profileErro}</div>}
               {profileSucesso && <div className="mb-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg">{profileSucesso}</div>}
-             
+              
               {profileTab === 'dados' && (
                 !isConfirmingDelete ? (
                   <form onSubmit={handleUpdateProfile} className="space-y-4">
@@ -878,7 +804,7 @@ export default function App() {
                           <div><span className="text-xs text-gray-500">Nº Pedido</span><p className="font-mono font-bold text-slate-900">{pedido.id_pedido}</p></div>
                           <div className="text-right">
                             <span className="text-xs text-gray-500">Status</span>
-                            <p className="font-bold text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800">{pedido.status}</p>
+                            <p className={`font-bold text-sm px-2 py-1 rounded-full ${pedido.status === 'Entregue' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{pedido.status}</p>
                           </div>
                         </div>
                         <div className="p-4 flex justify-between items-end">
@@ -901,21 +827,77 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL ADMIN (CRUD DE PRODUTOS COM UPLOAD DE IMAGENS) */}
+      {/* ========================================================= */}
+      {/* MODAL ADMIN (PRODUTOS + GESTÃO DE PEDIDOS) */}
+      {/* ========================================================= */}
       {isAdminModalOpen && isUserAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsAdminModalOpen(false)} />
-          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
-           
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
+            
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-slate-900 text-white">
               <h3 className="font-bold text-xl flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-red-500" /> Painel Admin</h3>
-              <button onClick={() => setIsAdminModalOpen(false)} className="text-gray-300 hover:text-white"><X className="w-6 h-6" /></button>
+              <div className="flex gap-4 items-center">
+                <button onClick={() => setAdminTab('lista')} className={`text-sm font-bold ${adminTab === 'lista' ? 'text-green-400' : 'text-gray-300'}`}>Produtos</button>
+                <button onClick={() => setAdminTab('pedidos')} className={`text-sm font-bold ${adminTab === 'pedidos' ? 'text-green-400' : 'text-gray-300'}`}>Gestão de Pedidos</button>
+                <button onClick={() => setIsAdminModalOpen(false)} className="ml-4 text-gray-300 hover:text-white"><X className="w-6 h-6" /></button>
+              </div>
             </div>
 
             <div className="p-6 overflow-y-auto bg-gray-50 flex-1">
               {adminErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{adminErro}</div>}
 
-              {adminTab === 'lista' ? (
+              {/* ABA GESTÃO DE PEDIDOS (NOVA) */}
+              {adminTab === 'pedidos' && (
+                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-gray-100 border-b">
+                        <tr>
+                          <th className="px-4 py-3">ID / Data</th>
+                          <th className="px-4 py-3">Cliente (ID)</th>
+                          <th className="px-4 py-3">Total</th>
+                          <th className="px-4 py-3 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {todosPedidos.length === 0 ? (
+                          <tr><td colSpan="4" className="text-center py-6 text-gray-500">Nenhum pedido recebido ainda.</td></tr>
+                        ) : (
+                          todosPedidos.map(ped => (
+                            <tr key={ped.id_pedido}>
+                              <td className="px-4 py-3">
+                                <span className="font-mono font-bold block text-slate-900">{ped.id_pedido}</span>
+                                <span className="text-xs text-gray-500">{new Date(ped.data_pedido).toLocaleString()}</span>
+                              </td>
+                              <td className="px-4 py-3 text-gray-600 font-mono text-xs">{ped.id_usuario}</td>
+                              <td className="px-4 py-3 font-bold text-slate-900">R$ {ped.total.toFixed(2)}</td>
+                              <td className="px-4 py-3 text-right">
+                                {/* O Select atualiza o status diretamente no onChange */}
+                                <select 
+                                  value={ped.status} 
+                                  onChange={(e) => updatePedidoStatus(ped.id_pedido, e.target.value)}
+                                  className={`px-3 py-1.5 rounded-lg border font-bold text-xs outline-none cursor-pointer ${
+                                    ped.status === 'Entregue' ? 'bg-green-50 text-green-700 border-green-200' : 
+                                    ped.status === 'Cancelado' ? 'bg-red-50 text-red-700 border-red-200' :
+                                    'bg-blue-50 text-blue-700 border-blue-200'
+                                  }`}>
+                                  <option value="Recebido">Recebido</option>
+                                  <option value="Em Separação">Em Separação</option>
+                                  <option value="Enviado">Enviado</option>
+                                  <option value="Entregue">Entregue</option>
+                                  <option value="Cancelado">Cancelado</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                 </div>
+              )}
+
+              {/* ABA LISTA DE PRODUTOS */}
+              {adminTab === 'lista' && (
                 <>
                   <div className="flex justify-end mb-4">
                     <button onClick={handleAdminNew} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><PlusCircle className="w-4 h-4" /> Novo Produto</button>
@@ -942,7 +924,10 @@ export default function App() {
                     </table>
                   </div>
                 </>
-              ) : (
+              )}
+
+              {/* ABA FORMULÁRIO DE PRODUTO */}
+              {adminTab === 'formulario' && (
                 <form onSubmit={handleAdminSaveProduct} className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
                   <div className="flex justify-between items-center mb-6 border-b pb-4">
                     <h4 className="font-bold text-gray-800 text-lg">Detalhes do Produto</h4>
@@ -954,7 +939,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label>
                       <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-green-500" placeholder="Ex: Camisa Brasil Titular 2024" />
                     </div>
-                   
+                    
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium mb-1">Preço (R$) *</label>
@@ -1033,7 +1018,7 @@ export default function App() {
                     <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
                       <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2"><ImageIcon className="w-5 h-5"/> Imagens do Produto *</label>
                       <p className="text-xs text-blue-700 mb-4">Carregue as imagens a partir do seu computador. A primeira imagem será a capa do produto.</p>
-                     
+                      
                       <div className="mb-4">
                         <label className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
                           <UploadCloud className="w-5 h-5" /> Adicionar Fotos
@@ -1126,7 +1111,6 @@ export default function App() {
             {cart.length > 0 && (
               <div className="p-6 border-t bg-gray-50">
                 <div className="flex justify-between font-bold text-lg mb-4"><span>Total</span><span>R$ {cartTotal.toFixed(2)}</span></div>
-                {/* Alterado para chamar a função que inicia o checkout */}
                 <button onClick={handleIniciarCheckout} className="w-full bg-green-600 text-white py-3 rounded-md font-bold hover:bg-green-700 shadow-md transition-colors">
                   Finalizar Compra
                 </button>
@@ -1136,39 +1120,30 @@ export default function App() {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* NOVO: MODAL DE FINALIZAÇÃO DE COMPRA (CHECKOUT) */}
-      {/* ========================================================= */}
+      {/* MODAL DE FINALIZAÇÃO DE COMPRA (CHECKOUT) */}
       {isCheckoutOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsCheckoutOpen(false)} />
           <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
-           
-            {/* Header */}
             <div className="px-6 py-4 border-b border-gray-200 bg-slate-900 text-white flex justify-between items-center">
               <h3 className="font-bold text-xl flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-green-500"/> Finalizar Compra</h3>
               <button onClick={() => setIsCheckoutOpen(false)} className="text-gray-400 hover:text-white"><X /></button>
             </div>
-           
-            {/* Steps (Abas) */}
             <div className="flex border-b border-gray-200 bg-gray-50">
               <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 1 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>1. Endereço</div>
               <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 2 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>2. Entrega</div>
               <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 3 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>3. Pagamento</div>
             </div>
 
-            {/* Conteúdo */}
             <div className="p-6 overflow-y-auto flex-1">
               {checkoutErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{checkoutErro}</div>}
 
-              {/* PASSO 1: ENDEREÇO */}
               {checkoutStep === 1 && (
                 <div className="space-y-4">
                   <h4 className="font-bold text-lg text-gray-800">Onde deseja receber o seu pedido?</h4>
-                 
                   {enderecos.length === 0 ? (
                     <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
-                      Você ainda não tem nenhum endereço salvo.
+                      Você ainda não tem nenhum endereço salvo. 
                       <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="mt-2 block font-bold underline">
                         Clique aqui para adicionar um endereço no seu perfil.
                       </button>
@@ -1176,10 +1151,7 @@ export default function App() {
                   ) : (
                     enderecos.map(end => (
                       <label key={end.id_endereco} className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.endereco?.id_endereco === end.id_endereco ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
-                        <input type="radio" name="endereco" className="mt-1 w-4 h-4 text-green-600"
-                          checked={checkoutData.endereco?.id_endereco === end.id_endereco}
-                          onChange={() => setCheckoutData({...checkoutData, endereco: end})}
-                        />
+                        <input type="radio" name="endereco" className="mt-1 w-4 h-4 text-green-600" checked={checkoutData.endereco?.id_endereco === end.id_endereco} onChange={() => setCheckoutData({...checkoutData, endereco: end})} />
                         <div>
                           <p className="font-bold text-gray-900">{end.rua}, {end.numero}</p>
                           <p className="text-sm text-gray-600">{end.bairro} - {end.cidade}/{end.estado} | CEP: {end.cep}</p>
@@ -1190,35 +1162,26 @@ export default function App() {
 
                   {enderecos.length > 0 && (
                     <div className="pt-2 pb-4">
-                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="text-sm font-bold text-green-600 hover:underline">
-                        + Cadastrar um novo endereço
-                      </button>
+                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="text-sm font-bold text-green-600 hover:underline">+ Cadastrar um novo endereço</button>
                     </div>
                   )}
 
                   <div className="pt-4 text-right border-t">
-                    <button disabled={!checkoutData.endereco} onClick={() => setCheckoutStep(2)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">
-                      Continuar para Entrega
-                    </button>
+                    <button disabled={!checkoutData.endereco} onClick={() => setCheckoutStep(2)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">Continuar para Entrega</button>
                   </div>
                 </div>
               )}
 
-              {/* PASSO 2: FRETE */}
               {checkoutStep === 2 && (
                 <div className="space-y-4">
                   <h4 className="font-bold text-lg text-gray-800">Escolha o tipo de entrega</h4>
-                 
                   {[
                     { tipo: 'PAC (Econômica)', valor: 15.00, prazo: 7 },
                     { tipo: 'SEDEX (Expressa)', valor: 35.00, prazo: 3 }
                   ].map(frete => (
                     <label key={frete.tipo} className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.frete?.tipo === frete.tipo ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
                       <div className="flex items-center gap-3">
-                        <input type="radio" name="frete" className="w-4 h-4 text-green-600"
-                          checked={checkoutData.frete?.tipo === frete.tipo}
-                          onChange={() => setCheckoutData({...checkoutData, frete})}
-                        />
+                        <input type="radio" name="frete" className="w-4 h-4 text-green-600" checked={checkoutData.frete?.tipo === frete.tipo} onChange={() => setCheckoutData({...checkoutData, frete})} />
                         <div>
                           <p className="font-bold text-gray-900 flex items-center gap-2"><Truck className="w-4 h-4 text-gray-500"/> {frete.tipo}</p>
                           <p className="text-sm text-gray-600">Chega em até {frete.prazo} dias úteis</p>
@@ -1227,21 +1190,15 @@ export default function App() {
                       <span className="font-bold text-green-700">R$ {frete.valor.toFixed(2)}</span>
                     </label>
                   ))}
-
                   <div className="pt-4 flex justify-between border-t mt-4">
                     <button onClick={() => setCheckoutStep(1)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
-                    <button disabled={!checkoutData.frete} onClick={() => setCheckoutStep(3)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">
-                      Continuar para Pagamento
-                    </button>
+                    <button disabled={!checkoutData.frete} onClick={() => setCheckoutStep(3)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">Continuar para Pagamento</button>
                   </div>
                 </div>
               )}
 
-              {/* PASSO 3: PAGAMENTO (Cartão Simulado) */}
               {checkoutStep === 3 && (
                 <div className="space-y-6">
-                 
-                  {/* Resumo */}
                   <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex items-center justify-between">
                     <div>
                       <p className="text-sm text-blue-800 font-medium">Resumo do Pedido (Itens + Frete)</p>
@@ -1250,27 +1207,14 @@ export default function App() {
                     <Box className="w-8 h-8 text-blue-300" />
                   </div>
 
-                  {/* Form de Pagamento */}
                   <div>
                     <h4 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5"/> Pagamento com Cartão</h4>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label>
-                        <input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label>
-                        <input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" />
-                      </div>
+                      <div><label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label><input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" /></div>
+                      <div><label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label><input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" /></div>
                       <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label>
-                          <input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label>
-                          <input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" />
-                        </div>
+                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label><input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" /></div>
+                        <div><label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label><input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" /></div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1 text-gray-700">Parcelamento</label>
@@ -1291,7 +1235,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-
             </div>
           </div>
         </div>
@@ -1306,9 +1249,9 @@ export default function App() {
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Filter className="w-5 h-5"/> Filtros Refinados</h2>
               <button onClick={() => setIsFilterSidebarOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-           
+            
             <div className="p-4 space-y-6">
-             
+              
               <div className="bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between cursor-pointer" onClick={() => setFiltrosAvancados({...filtrosAvancados, personalizavel: !filtrosAvancados.personalizavel})}>
                 <span className="text-sm font-bold text-green-900">Aceita Personalização</span>
                 <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'bg-green-500' : ''}`}>
@@ -1443,7 +1386,7 @@ export default function App() {
 function ProductCard({ produto, onAdd }) {
   const [tamanho, setTamanho] = useState('M');
   const [imgIndex, setImgIndex] = useState(0);
- 
+  
   const tamanhosDisponiveis = produto.tamanhos && produto.tamanhos.length > 0 ? produto.tamanhos : ['P', 'M', 'G', 'GG'];
   const listaImagens = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
 
@@ -1470,19 +1413,19 @@ function ProductCard({ produto, onAdd }) {
           Personalizável
         </span>
       )}
-     
+      
       <div className="relative w-full h-72 bg-gray-50 flex items-center justify-center">
         {listaImagens.length > 0 ? (
           <img src={listaImagens[imgIndex]} className="w-full h-full object-cover transition-opacity duration-300" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
         ) : (
           <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
         )}
-       
+        
         {listaImagens.length > 1 && (
           <>
             <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
             <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
-           
+            
             <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
               {listaImagens.map((_, idx) => (
                 <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === idx ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />

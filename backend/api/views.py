@@ -27,37 +27,32 @@ def is_admin(request):
         if not user_doc.exists: return False
         user_data = user_doc.to_dict()
         return user_data.get('email') == 'admin@futgo.com' or user_data.get('is_admin') == True
-    except: 
+    except:
         return False
 
 # ==========================================
-# NOVO: UPLOAD DE MÚLTIPLAS IMAGENS
+# UPLOAD DE MÚLTIPLAS IMAGENS
 # ==========================================
 class UploadImagemView(APIView):
     def post(self, request):
         try:
-            if not is_admin(request): 
+            if not is_admin(request):
                 return Response({"erro": "Acesso negado."}, status=403)
-            
+           
             uploaded_urls = []
             files = request.FILES.getlist('imagens')
-            
+           
             if not files:
                 return Response({"erro": "Nenhuma imagem recebida no formulário."}, status=400)
-            
+           
             for f in files:
-                # Gerar um nome de ficheiro único para não haver sobreposições
                 ext = f.name.split('.')[-1]
                 file_name = f"produtos/{uuid.uuid4().hex}.{ext}"
-                
-                # Guarda fisicamente na pasta media/produtos/
                 path = default_storage.save(file_name, ContentFile(f.read()))
-                
-                # Gera o URL completo (Ex: http://localhost:8000/media/produtos/nome.jpg)
                 media_url = getattr(settings, 'MEDIA_URL', '/media/')
                 full_url = request.build_absolute_uri(f"{media_url}{path}")
                 uploaded_urls.append(full_url)
-                
+               
             return Response({"urls": uploaded_urls}, status=200)
         except Exception as e:
             return Response({"erro": str(e)}, status=500)
@@ -78,15 +73,15 @@ class SocialLoginView(APIView):
             decoded_token = firebase_auth.verify_id_token(id_token, clock_skew_seconds=10)
             raw_email = decoded_token.get('email') or fallback_email
             email = raw_email.lower().strip() if raw_email else ""
-            
+           
             if not email:
                 return Response({"erro": "Provedor social sem e-mail."}, status=status.HTTP_400_BAD_REQUEST)
 
             raw_nome = decoded_token.get('name') or fallback_name
             nome = raw_nome.strip() if raw_nome else 'Utilizador'
-            
+           
             query = db.collection('usuarios').where(filter=FieldFilter('email', '==', email)).limit(1).get()
-            
+           
             if len(query) > 0:
                 return Response({"mensagem": "Login com sucesso!", "usuario": query[0].to_dict()}, status=status.HTTP_200_OK)
             else:
@@ -105,7 +100,7 @@ class CheckAuthView(APIView):
         try:
             identificador = request.data.get('identificador', '').strip().lower()
             if not identificador: return Response({"erro": "Identificador obrigatório."}, status=400)
-            
+           
             is_email = '@' in identificador
             if is_email:
                 query = db.collection('usuarios').where(filter=FieldFilter('email', '==', identificador)).limit(1).get()
@@ -114,7 +109,7 @@ class CheckAuthView(APIView):
                 query = db.collection('usuarios').where(filter=FieldFilter('telefone', '==', tel_limpo)).limit(1).get()
                 if len(query) == 0 and tel_limpo.startswith('55'):
                     query = db.collection('usuarios').where(filter=FieldFilter('telefone', '==', tel_limpo[2:])).limit(1).get()
-                
+               
             return Response({"existe": len(query) > 0, "metodo": "email" if is_email else "whatsapp", "identificador": identificador}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
 
@@ -128,15 +123,11 @@ class SendOTPView(APIView):
             otp_code = str(random.randint(100000, 999999))
             db.collection('otps').document(identificador).set({'otp': otp_code, 'timestamp': time.time()})
 
-            # ==============================================================
-            # NOVO: IMPRIMIR O CÓDIGO NO TERMINAL PARA TODOS OS CASOS
-            # ==============================================================
             print("\n" + "="*50)
             print(f"🔑 [FUTGO] NOVO CÓDIGO OTP: {otp_code}")
             print(f"🎯 Destino: {identificador}")
             print(f"📡 Método:  {metodo.upper()}")
             print("="*50 + "\n")
-            # ==============================================================
 
             if metodo == 'email':
                 try:
@@ -155,7 +146,7 @@ class SendOTPView(APIView):
                         client = Client(account_sid, auth_token)
                         to_number = f"whatsapp:{identificador}" if identificador.startswith('+') else f"whatsapp:+{identificador}"
                         from_number = f"whatsapp:{twilio_number}" if not str(twilio_number).startswith('whatsapp:') else twilio_number
-                        
+                       
                         is_sandbox = '14155238886' in str(twilio_number)
 
                         if is_sandbox:
@@ -175,18 +166,18 @@ class LoginOTPView(APIView):
         try:
             identificador = request.data.get('identificador', '').strip().lower()
             otp_recebido = request.data.get('otp')
-            
+           
             otp_doc = db.collection('otps').document(identificador).get()
             if not otp_doc.exists or str(otp_doc.to_dict().get('otp')) != str(otp_recebido):
                 return Response({"erro": "Código OTP inválido."}, status=401)
-                
+               
             db.collection('otps').document(identificador).delete()
             if '@' in identificador:
                 query = db.collection('usuarios').where(filter=FieldFilter('email', '==', identificador)).limit(1).get()
             else:
                 tel_limpo = re.sub(r'\D', '', identificador)
                 query = db.collection('usuarios').where(filter=FieldFilter('telefone', '==', tel_limpo)).limit(1).get()
-            
+           
             if len(query) == 0: return Response({"erro": "Utilizador não encontrado."}, status=404)
             return Response({"mensagem": "Login ok!", "usuario": query[0].to_dict()}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
@@ -197,15 +188,15 @@ class RegisterView(APIView):
             dados = request.data
             identificador = dados.get('identificador', '').strip().lower()
             otp_recebido = dados.get('otp')
-            
+           
             otp_doc = db.collection('otps').document(identificador).get()
             if not otp_doc.exists or str(otp_doc.to_dict().get('otp')) != str(otp_recebido): return Response({"erro": "Código OTP inválido."}, status=401)
-                
+               
             db.collection('otps').document(identificador).delete()
             email_limpo = dados.get('email', '').strip().lower()
             tel_limpo = re.sub(r'\D', '', str(dados.get('telefone', '')))
             cpf_limpo = re.sub(r'\D', '', str(dados.get('cpf', '')))
-            
+           
             check_email = db.collection('usuarios').where(filter=FieldFilter('email', '==', email_limpo)).get()
             if len(check_email) > 0: return Response({"erro": "E-mail já registado."}, status=409)
 
@@ -280,18 +271,17 @@ class ProdutoListView(APIView):
             if not is_admin(request): return Response({"erro": "Acesso negado. Apenas administradores."}, status=403)
             dados = request.data
             id_prod = str(uuid.uuid4())
-            
-            # Novo: Gestão de Múltiplas Imagens
+           
             imagens_lista = dados.get('imagens', [])
             imagem_principal = imagens_lista[0] if imagens_lista else ""
-            
+           
             novo_prod = {
                 "id": id_prod,
                 "nome_camisa": dados.get('nome_camisa', ''),
                 "preco": float(dados.get('preco', 0.0)),
                 "categoria": dados.get('categoria', 'Nacional'),
-                "imagem": imagem_principal, # Mantém a principal para compatibilidade rápida
-                "imagens": imagens_lista,   # Array completo de fotos
+                "imagem": imagem_principal,
+                "imagens": imagens_lista,
                 "cores": dados.get('cores', []),
                 "pais": dados.get('pais', ''),
                 "liga": dados.get('liga', ''),
@@ -313,13 +303,11 @@ class ProdutoDetailView(APIView):
             if not is_admin(request): return Response({"erro": "Acesso negado."}, status=403)
             prod_ref = db.collection('produtos').document(str(id_produto))
             if not prod_ref.get().exists: return Response({"erro": "Não encontrado."}, status=404)
-            
+           
             update_data = request.data.copy()
-            
-            # Garantir que se vieram imagens, a primeira vira a 'imagem' principal
             if 'imagens' in update_data and len(update_data['imagens']) > 0:
                 update_data['imagem'] = update_data['imagens'][0]
-                
+               
             prod_ref.update(update_data)
             return Response({"mensagem": "Atualizado!", "produto": prod_ref.get().to_dict()}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
@@ -330,3 +318,52 @@ class ProdutoDetailView(APIView):
             db.collection('produtos').document(str(id_produto)).delete()
             return Response({"mensagem": "Removido."}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
+
+# ==========================================
+# NOVAS VIEWS: PEDIDOS (CHECKOUT)
+# ==========================================
+class PedidoCreateView(APIView):
+    def post(self, request):
+        try:
+            # Verifica se está autenticado usando o cabeçalho X-User-ID que o Frontend envia
+            user_id = request.headers.get('X-User-ID')
+            if not user_id:
+                return Response({"erro": "Utilizador não autenticado."}, status=401)
+           
+            dados = request.data
+           
+            # Gera um ID único para o Pedido
+            id_pedido = f"PED-{int(time.time())}"
+           
+            novo_pedido = {
+                "id_pedido": id_pedido,
+                "id_usuario": int(user_id),
+                "itens": dados.get('itens', []),
+                "endereco_id": dados.get('endereco_id'),
+                "frete": dados.get('frete', {}),
+                "pagamento": dados.get('pagamento', {}),
+                "total": float(dados.get('total', 0.0)),
+                "status": "Recebido", # Status inicial
+                "data_pedido": datetime.utcnow().isoformat() + "Z"
+            }
+           
+            # Salva na Firebase
+            db.collection('pedidos').document(id_pedido).set(novo_pedido)
+           
+            return Response({"mensagem": "Pedido realizado com sucesso!", "pedido": novo_pedido}, status=201)
+        except Exception as e:
+            return Response({"erro": str(e)}, status=500)
+
+class PedidoUserListView(APIView):
+    def get(self, request, id_usuario):
+        try:
+            # Vai buscar todos os pedidos associados a este ID de utilizador
+            docs = db.collection('pedidos').where(filter=FieldFilter('id_usuario', '==', int(id_usuario))).get()
+            pedidos = [doc.to_dict() for doc in docs]
+           
+            # Ordena do mais recente para o mais antigo
+            pedidos.sort(key=lambda x: x.get('data_pedido', ''), reverse=True)
+           
+            return Response(pedidos, status=200)
+        except Exception as e:
+            return Response({"erro": str(e)}, status=500)

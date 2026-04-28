@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud } from 'lucide-react';
+// IMPORTANTE: Adicionados Truck, Box, CreditCard, CheckCircle
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 
@@ -62,7 +63,6 @@ export default function App() {
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [busca, setBusca] = useState("");
 
-  // --- ESTADOS DO FILTRO LATERAL (AVANÇADO) ---
   const [isFilterSidebarOpen, setIsFilterSidebarOpen] = useState(false);
   const [filtrosAvancados, setFiltrosAvancados] = useState({
     precoMin: '', precoMax: '', cores: [], tamanhos: [], paises: [], ligas: [],
@@ -83,7 +83,7 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [profileTab, setProfileTab] = useState('dados');
+  const [profileTab, setProfileTab] = useState('dados'); // Adicionado depois: 'pedidos'
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
   const [editCpf, setEditCpf] = useState('');
@@ -103,33 +103,40 @@ export default function App() {
   const [endEstado, setEndEstado] = useState('');
   const [isBuscandoCep, setIsBuscandoCep] = useState(false);
 
-  // --- ESTADOS DO ADMIN ---
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [adminTab, setAdminTab] = useState('lista');
   const [adminProdutoEditing, setAdminProdutoEditing] = useState(null);
   const [prodNome, setProdNome] = useState('');
   const [prodPreco, setProdPreco] = useState('');
   const [prodCategoria, setProdCategoria] = useState('Nacional');
-  const [prodImagem, setProdImagem] = useState(''); // Mantido para fallback
- 
-  // NOVO: Gestão de Múltiplas Imagens Locais
-  const [prodImagensSalvas, setProdImagensSalvas] = useState([]); // URLs já no backend
-  const [prodNovosArquivos, setProdNovosArquivos] = useState([]); // File objects a serem enviados
-
+  const [prodImagem, setProdImagem] = useState('');
+  const [prodImagensSalvas, setProdImagensSalvas] = useState([]);
+  const [prodNovosArquivos, setProdNovosArquivos] = useState([]);
   const [prodCores, setProdCores] = useState([]);
   const [prodPais, setProdPais] = useState('');
   const [prodLiga, setProdLiga] = useState('');
   const [prodTamanhos, setProdTamanhos] = useState(['P', 'M', 'G', 'GG']);
- 
-  // Novos campos do Admin
   const [prodTemporada, setProdTemporada] = useState('');
   const [prodTipo, setProdTipo] = useState('Primeira Camisa');
   const [prodMarca, setProdMarca] = useState('');
   const [prodGenero, setProdGenero] = useState('Unissex');
   const [prodPersonalizavel, setProdPersonalizavel] = useState(false);
-
   const [adminErro, setAdminErro] = useState('');
   const [isAdminLoading, setIsAdminLoading] = useState(false);
+
+  // ==========================================
+  // NOVOS ESTADOS: CHECKOUT E PEDIDOS
+  // ==========================================
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [checkoutStep, setCheckoutStep] = useState(1);
+  const [checkoutData, setCheckoutData] = useState({
+    endereco: null,
+    frete: null,
+    cartao: { nome: '', numero: '', validade: '', cvv: '', parcelas: 1 }
+  });
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutErro, setCheckoutErro] = useState('');
+  const [pedidosUsuario, setPedidosUsuario] = useState([]); // Histórico do utilizador
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
@@ -154,6 +161,8 @@ export default function App() {
             if (res.ok) {
               const data = await res.json();
               setAppUser(data.usuario);
+              // Assim que logar, também pode puxar os pedidos
+              fetchPedidosUser(data.usuario.id_usuario);
             }
           } catch (e) {
             console.error("Falha ao recuperar sessão:", e);
@@ -164,7 +173,6 @@ export default function App() {
     }
   }, []);
 
-  // NOVO: Cleanup dos previews das imagens para libertar RAM do navegador
   useEffect(() => {
     return () => {
       prodNovosArquivos.forEach(item => URL.revokeObjectURL(item.preview));
@@ -179,6 +187,20 @@ export default function App() {
       if (res.ok) setProdutos(data);
     } catch (error) { console.error("Erro ao puxar produtos:", error); }
     finally { setIsLoadingProdutos(false); }
+  };
+
+  // Puxa histórico de pedidos para o perfil
+  const fetchPedidosUser = async (userId) => {
+    if (!userId) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/pedidos/user/${userId}/`);
+      if (res.ok) {
+        const data = await res.json();
+        setPedidosUsuario(data);
+      }
+    } catch (error) {
+      console.error("Erro ao puxar pedidos:", error);
+    }
   };
 
   const handleSocialLogin = async (provider) => {
@@ -198,7 +220,9 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha na sincronização.');
-      setAppUser(data.usuario); closeAuthModal();
+      setAppUser(data.usuario);
+      fetchPedidosUser(data.usuario.id_usuario); // Puxa histórico de compras
+      closeAuthModal();
     } catch (error) { setAuthErro(error.message); }
     finally { setIsAuthLoading(false); isLoggingInRef.current = false; }
   };
@@ -258,7 +282,9 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Código inválido.');
      
-      setAppUser(data.usuario); closeAuthModal();
+      setAppUser(data.usuario);
+      fetchPedidosUser(data.usuario.id_usuario);
+      closeAuthModal();
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
 
@@ -273,6 +299,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok) { setAppUser(data.usuario); setEditNome(data.usuario.nome); setEditTelefone(data.usuario.telefone); setEditCpf(data.usuario.cpf || ''); }
       await fetchEnderecos();
+      await fetchPedidosUser(appUser.id_usuario);
     } catch (error) {} finally { setIsFetchingData(false); }
   };
 
@@ -291,7 +318,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try { if (firebaseAuth) await signOut(firebaseAuth); } catch (error) { console.error("Erro ao sair:", error); }
-    setAppUser(null); setIsProfileModalOpen(false);
+    setAppUser(null); setIsProfileModalOpen(false); setCart([]); setPedidosUsuario([]);
   };
 
   const handleDeleteAccount = async () => {
@@ -352,6 +379,75 @@ export default function App() {
     } catch (error) { setProfileErro('Erro ao apagar.'); }
   };
 
+  // ==========================================
+  // FUNÇÕES DO CHECKOUT
+  // ==========================================
+  const handleIniciarCheckout = () => {
+    // 1. Fechar o carrinho para não sobrepor janelas
+    setIsCartOpen(false);
+
+    // 2. Se não estiver logado, obriga a fazer o Login
+    if (!appUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    // 3. Se estiver logado, garante que temos os endereços carregados e abre o Checkout Modal
+    if (enderecos.length === 0) fetchEnderecos();
+   
+    setIsCheckoutOpen(true);
+    setCheckoutStep(1); // Começa sempre no Passo 1
+    setCheckoutErro('');
+  };
+
+  const handleFinalizarCompra = async () => {
+    setCheckoutLoading(true);
+    setCheckoutErro('');
+   
+    try {
+      // Monta o Payload para enviar à API
+      const payload = {
+        itens: cart.map(i => ({
+          id: i.id,
+          nome_camisa: i.nome_camisa,
+          tamanho: i.tamanho,
+          quantidade: i.quantidade,
+          preco: i.preco
+        })),
+        endereco_id: checkoutData.endereco.id_endereco,
+        frete: checkoutData.frete,
+        pagamento: checkoutData.cartao, // Simplificação. No mundo real, enviaria apenas o token do cartão.
+        total: cartTotal + checkoutData.frete.valor
+      };
+     
+      const res = await fetch(`${API_BASE_URL}/pedidos/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-ID': appUser.id_usuario // Muito Importante para o backend saber quem é o comprador
+        },
+        body: JSON.stringify(payload)
+      });
+     
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Falha ao finalizar o pedido.');
+     
+      // Sucesso!
+      setCart([]); // Esvazia o carrinho
+      setIsCheckoutOpen(false); // Fecha o modal
+      alert(`Pedido Realizado com Sucesso!\nO seu número de pedido é: ${data.pedido.id_pedido}`);
+     
+      // Atualiza o histórico de pedidos no perfil
+      fetchPedidosUser(appUser.id_usuario);
+     
+    } catch (error) {
+      setCheckoutErro(error.message);
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
+
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); };
 
   const handleAdminEdit = (produto) => {
@@ -361,7 +457,6 @@ export default function App() {
     setProdTemporada(produto.temporada || ''); setProdTipo(produto.tipo_uniforme || 'Primeira Camisa'); setProdMarca(produto.marca || '');
     setProdGenero(produto.genero || 'Unissex'); setProdPersonalizavel(produto.personalizavel || false);
    
-    // NOVO: Caregar array de imagens salvas
     const imagensExistentes = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
     setProdImagensSalvas(imagensExistentes);
     setProdNovosArquivos([]);
@@ -375,20 +470,18 @@ export default function App() {
     setProdCores([]); setProdPais(''); setProdLiga(''); setProdTamanhos(['P', 'M', 'G', 'GG']);
     setProdTemporada(''); setProdTipo('Primeira Camisa'); setProdMarca(''); setProdGenero('Unissex'); setProdPersonalizavel(false);
    
-    // NOVO: Limpar arrays
     setProdImagensSalvas([]);
     setProdNovosArquivos([]);
 
     setAdminTab('formulario');
   };
 
-  // NOVO: Funções de manipulação das imagens locais no form
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     const novosItens = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
     setProdNovosArquivos(prev => [...prev, ...novosItens]);
-    e.target.value = null; // reset input
+    e.target.value = null;
   };
 
   const removerNovaImagem = (index) => {
@@ -411,7 +504,6 @@ export default function App() {
   const handleAdminSaveProduct = async (e) => {
     e.preventDefault();
 
-    // Validação para ter a certeza que existe pelo menos uma imagem
     if (prodImagensSalvas.length === 0 && prodNovosArquivos.length === 0 && !prodImagem) {
       setAdminErro('É obrigatório adicionar pelo menos uma imagem.');
       return;
@@ -421,7 +513,6 @@ export default function App() {
     let urlsFinais = [...prodImagensSalvas];
 
     try {
-      // UPLOAD DE FICHEIROS NOVOS (Se existirem)
       if (prodNovosArquivos.length > 0) {
         const formData = new FormData();
         prodNovosArquivos.forEach(item => {
@@ -435,13 +526,11 @@ export default function App() {
         });
 
         const uploadData = await uploadRes.json();
-        if (!uploadRes.ok) throw new Error(uploadData.erro || 'Falha ao guardar os ficheiros de imagem no servidor.');
+        if (!uploadRes.ok) throw new Error(uploadData.erro || 'Falha ao guardar os ficheiros no servidor.');
 
-        // Junta as antigas salvas com as novas convertidas
         urlsFinais = [...urlsFinais, ...uploadData.urls];
       }
 
-      // Fallback de segurança se usar só o input de link antigo
       if(urlsFinais.length === 0 && prodImagem) {
         urlsFinais = [prodImagem];
       }
@@ -449,8 +538,8 @@ export default function App() {
       const headers = { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario };
       const payload = {
         nome_camisa: prodNome, preco: parseFloat(prodPreco), categoria: prodCategoria,
-        imagem: urlsFinais[0] || prodImagem, // atualiza a prop legada
-        imagens: urlsFinais, // NOVA PROP: Array de Imagens
+        imagem: urlsFinais[0] || prodImagem,
+        imagens: urlsFinais,
         cores: prodCores, pais: prodPais.trim().toLowerCase(), liga: prodLiga.trim().toLowerCase(), tamanhos: prodTamanhos,
         temporada: prodTemporada.trim(), tipo_uniforme: prodTipo, marca: prodMarca.trim().toLowerCase(), genero: prodGenero, personalizavel: prodPersonalizavel
       };
@@ -482,10 +571,11 @@ export default function App() {
   };
 
   const addToCart = (produto, tamanho) => {
+    const prodId = produto.id || produto.id_produto || produto._id;
     setCart(prevCart => {
-      const existingItem = prevCart.find(item => item.id === produto.id && item.tamanho === tamanho);
-      if (existingItem) return prevCart.map(item => (item.id === produto.id && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
-      return [...prevCart, { ...produto, tamanho, quantidade: 1 }];
+      const existingItem = prevCart.find(item => item.id === prodId && item.tamanho === tamanho);
+      if (existingItem) return prevCart.map(item => (item.id === prodId && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
+      return [...prevCart, { ...produto, id: prodId, tamanho, quantidade: 1 }];
     });
     setIsCartOpen(true);
   };
@@ -494,7 +584,6 @@ export default function App() {
   const cartTotal = useMemo(() => cart.reduce((total, item) => total + (item.preco * item.quantidade), 0), [cart]);
   const cartItemsCount = cart.reduce((count, item) => count + item.quantidade, 0);
 
-  // --- OPÇÕES ÚNICAS PARA O FILTRO LATERAL ---
   const opcoesFiltro = useMemo(() => {
     return {
       cores: [...new Set(produtos.flatMap(p => p.cores || []))],
@@ -522,12 +611,10 @@ export default function App() {
       const matchCategoria = filtroCategoria === "Todas" || p.categoria === filtroCategoria;
       if (!matchCategoria) return false;
      
-      // Filtros numéricos / booleanos
       if (filtrosAvancados.precoMin && Number(p.preco) < Number(filtrosAvancados.precoMin)) return false;
       if (filtrosAvancados.precoMax && Number(p.preco) > Number(filtrosAvancados.precoMax)) return false;
       if (filtrosAvancados.personalizavel && !p.personalizavel) return false;
      
-      // Filtros de Array (Sidebar)
       if (filtrosAvancados.cores.length > 0 && (!p.cores || !filtrosAvancados.cores.some(c => p.cores.includes(c)))) return false;
       if (filtrosAvancados.paises.length > 0 && !filtrosAvancados.paises.includes(p.pais)) return false;
       if (filtrosAvancados.ligas.length > 0 && !filtrosAvancados.ligas.includes(p.liga)) return false;
@@ -543,7 +630,6 @@ export default function App() {
 
       if (termosBusca.length === 0 || termosBusca[0] === "") return true;
 
-      // Busca Textual
       const atributosDaCamisola = `
         ${p.nome_camisa || ''} ${p.categoria || ''} ${p.preco || ''}
         ${(p.cores || []).join(' ')} ${p.pais || ''} ${p.liga || ''}
@@ -628,14 +714,12 @@ export default function App() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {produtosFiltrados.length > 0 ? produtosFiltrados.map((produto) => <ProductCard key={produto.id} produto={produto} onAdd={addToCart} />) : <div className="col-span-full text-center py-12 text-gray-500">Nenhum produto encontrado com estes filtros.</div>}
+            {produtosFiltrados.length > 0 ? produtosFiltrados.map((produto) => <ProductCard key={produto.id || Math.random()} produto={produto} onAdd={addToCart} />) : <div className="col-span-full text-center py-12 text-gray-500">Nenhum produto encontrado com estes filtros.</div>}
           </div>
         )}
       </main>
 
-      {/* ========================================================= */}
-      {/* MODAL DE AUTENTICAÇÃO E OTP (Ocultado para brevidade) */}
-      {/* ========================================================= */}
+      {/* MODAL DE LOGIN */}
       {isAuthModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-60 transition-opacity" onClick={closeAuthModal} />
@@ -695,21 +779,22 @@ export default function App() {
         </div>
       )}
 
-      {/* ========================================================= */}
       {/* MODAL DO PERFIL DO UTILIZADOR */}
-      {/* ========================================================= */}
       {isProfileModalOpen && appUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-60 transition-opacity" onClick={() => setIsProfileModalOpen(false)} />
-          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden z-50 flex flex-col max-h-[90vh]">
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-slate-50">
               <h3 className="font-bold text-xl text-slate-900 flex items-center gap-2">A Minha Conta</h3>
               <button onClick={() => setIsProfileModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
+           
             <div className="flex border-b border-gray-200 bg-white">
               <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
               <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
+              <button onClick={() => setProfileTab('pedidos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'pedidos' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Meus Pedidos <span className="ml-1 bg-gray-100 text-gray-600 py-0.5 px-2 rounded-full text-xs">{pedidosUsuario.length}</span></button>
             </div>
+
             <div className="p-6 overflow-y-auto">
               {profileErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{profileErro}</div>}
               {profileSucesso && <div className="mb-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg">{profileSucesso}</div>}
@@ -781,14 +866,42 @@ export default function App() {
                   </div>
                 </form>
               )}
+
+              {profileTab === 'pedidos' && (
+                <div className="space-y-4">
+                  {pedidosUsuario.length === 0 ? (
+                    <p className="text-center text-gray-500 py-10">Nenhum pedido realizado ainda.</p>
+                  ) : (
+                    pedidosUsuario.map(pedido => (
+                      <div key={pedido.id_pedido} className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+                        <div className="bg-slate-50 px-4 py-3 flex justify-between items-center border-b border-gray-100">
+                          <div><span className="text-xs text-gray-500">Nº Pedido</span><p className="font-mono font-bold text-slate-900">{pedido.id_pedido}</p></div>
+                          <div className="text-right">
+                            <span className="text-xs text-gray-500">Status</span>
+                            <p className="font-bold text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800">{pedido.status}</p>
+                          </div>
+                        </div>
+                        <div className="p-4 flex justify-between items-end">
+                           <ul className="text-sm text-gray-600 space-y-1">
+                             {pedido.itens.map(item => <li key={`${item.id}-${item.tamanho}`}>- {item.quantidade}x {item.nome_camisa} ({item.tamanho})</li>)}
+                           </ul>
+                           <div className="text-right">
+                             <p className="text-xs text-gray-500 mb-1">Data: {new Date(pedido.data_pedido).toLocaleDateString()}</p>
+                             <p className="font-extrabold text-lg text-slate-900">R$ {pedido.total.toFixed(2)}</p>
+                           </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
             </div>
           </div>
         </div>
       )}
 
-      {/* ========================================================= */}
       {/* MODAL ADMIN (CRUD DE PRODUTOS COM UPLOAD DE IMAGENS) */}
-      {/* ========================================================= */}
       {isAdminModalOpen && isUserAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsAdminModalOpen(false)} />
@@ -917,7 +1030,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* NOVO SISTEMA DE UPLOAD DE IMAGENS */}
                     <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
                       <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2"><ImageIcon className="w-5 h-5"/> Imagens do Produto *</label>
                       <p className="text-xs text-blue-700 mb-4">Carregue as imagens a partir do seu computador. A primeira imagem será a capa do produto.</p>
@@ -971,9 +1083,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ========================================================= */}
       {/* MODAL DO CARRINHO */}
-      {/* ========================================================= */}
       {isCartOpen && (
         <div className="fixed inset-0 z-40 overflow-hidden">
           <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsCartOpen(false)} />
@@ -985,33 +1095,41 @@ export default function App() {
             <div className="flex-1 overflow-y-auto px-4 py-6">
               {cart.length === 0 ? <p className="text-center text-gray-500 py-10">Carrinho vazio.</p> : (
                 <ul className="divide-y divide-gray-200">
-                  {cart.map((item) => (
-                    <li key={`${item.id}-${item.tamanho}`} className="py-6 flex">
-                      <img src={item.imagem} className="w-16 h-16 rounded object-cover" />
-                      <div className="ml-4 flex-1">
-                        <div className="flex justify-between">
-                          <h3 className="text-sm font-medium text-gray-900">{item.nome_camisa}</h3>
-                          <button onClick={() => removeFromCart(item.id, item.tamanho)} className="text-gray-400 hover:text-red-500 ml-2"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">Tam: {item.tamanho}</p>
-                        <div className="flex justify-between items-center mt-2">
-                          <div className="flex items-center gap-2 border rounded">
-                            <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, -1)}><Minus className="w-3 h-3"/></button>
-                            <span className="text-sm px-2 font-medium">{item.quantidade}</span>
-                            <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, 1)}><Plus className="w-3 h-3"/></button>
+                  {cart.map((item) => {
+                    const imgUrl = (item.imagens && item.imagens.length > 0) ? item.imagens[0] : (item.imagem || 'https://placehold.co/100?text=Sem+Foto');
+                    const precoNumerico = Number(String(item.preco).replace(',', '.')) || 0;
+
+                    return (
+                      <li key={`${item.id}-${item.tamanho}`} className="py-6 flex">
+                        <img src={imgUrl} className="w-16 h-16 rounded object-cover" />
+                        <div className="ml-4 flex-1">
+                          <div className="flex justify-between">
+                            <h3 className="text-sm font-medium text-gray-900">{item.nome_camisa}</h3>
+                            <button onClick={() => removeFromCart(item.id, item.tamanho)} className="text-gray-400 hover:text-red-500 ml-2"><Trash2 className="w-4 h-4" /></button>
                           </div>
-                          <p className="font-bold">R$ {(item.preco * item.quantidade).toFixed(2)}</p>
+                          <p className="text-xs text-gray-500 mt-1">Tam: {item.tamanho}</p>
+                          <div className="flex justify-between items-center mt-2">
+                            <div className="flex items-center gap-2 border rounded">
+                              <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, -1)}><Minus className="w-3 h-3"/></button>
+                              <span className="text-sm px-2 font-medium">{item.quantidade}</span>
+                              <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, 1)}><Plus className="w-3 h-3"/></button>
+                            </div>
+                            <p className="font-bold">R$ {(precoNumerico * item.quantidade).toFixed(2)}</p>
+                          </div>
                         </div>
-                      </div>
-                    </li>
-                  ))}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>
             {cart.length > 0 && (
               <div className="p-6 border-t bg-gray-50">
                 <div className="flex justify-between font-bold text-lg mb-4"><span>Total</span><span>R$ {cartTotal.toFixed(2)}</span></div>
-                <button className="w-full bg-green-600 text-white py-3 rounded-md font-bold">Finalizar Compra</button>
+                {/* Alterado para chamar a função que inicia o checkout */}
+                <button onClick={handleIniciarCheckout} className="w-full bg-green-600 text-white py-3 rounded-md font-bold hover:bg-green-700 shadow-md transition-colors">
+                  Finalizar Compra
+                </button>
               </div>
             )}
           </div>
@@ -1019,8 +1137,167 @@ export default function App() {
       )}
 
       {/* ========================================================= */}
-      {/* MODAL DO FILTRO LATERAL AVANÇADO (AGORA COM OS 5 NOVOS FILTROS) */}
+      {/* NOVO: MODAL DE FINALIZAÇÃO DE COMPRA (CHECKOUT) */}
       {/* ========================================================= */}
+      {isCheckoutOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsCheckoutOpen(false)} />
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
+           
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200 bg-slate-900 text-white flex justify-between items-center">
+              <h3 className="font-bold text-xl flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-green-500"/> Finalizar Compra</h3>
+              <button onClick={() => setIsCheckoutOpen(false)} className="text-gray-400 hover:text-white"><X /></button>
+            </div>
+           
+            {/* Steps (Abas) */}
+            <div className="flex border-b border-gray-200 bg-gray-50">
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 1 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>1. Endereço</div>
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 2 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>2. Entrega</div>
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 3 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>3. Pagamento</div>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="p-6 overflow-y-auto flex-1">
+              {checkoutErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{checkoutErro}</div>}
+
+              {/* PASSO 1: ENDEREÇO */}
+              {checkoutStep === 1 && (
+                <div className="space-y-4">
+                  <h4 className="font-bold text-lg text-gray-800">Onde deseja receber o seu pedido?</h4>
+                 
+                  {enderecos.length === 0 ? (
+                    <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
+                      Você ainda não tem nenhum endereço salvo.
+                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="mt-2 block font-bold underline">
+                        Clique aqui para adicionar um endereço no seu perfil.
+                      </button>
+                    </div>
+                  ) : (
+                    enderecos.map(end => (
+                      <label key={end.id_endereco} className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.endereco?.id_endereco === end.id_endereco ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
+                        <input type="radio" name="endereco" className="mt-1 w-4 h-4 text-green-600"
+                          checked={checkoutData.endereco?.id_endereco === end.id_endereco}
+                          onChange={() => setCheckoutData({...checkoutData, endereco: end})}
+                        />
+                        <div>
+                          <p className="font-bold text-gray-900">{end.rua}, {end.numero}</p>
+                          <p className="text-sm text-gray-600">{end.bairro} - {end.cidade}/{end.estado} | CEP: {end.cep}</p>
+                        </div>
+                      </label>
+                    ))
+                  )}
+
+                  {enderecos.length > 0 && (
+                    <div className="pt-2 pb-4">
+                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="text-sm font-bold text-green-600 hover:underline">
+                        + Cadastrar um novo endereço
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="pt-4 text-right border-t">
+                    <button disabled={!checkoutData.endereco} onClick={() => setCheckoutStep(2)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">
+                      Continuar para Entrega
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PASSO 2: FRETE */}
+              {checkoutStep === 2 && (
+                <div className="space-y-4">
+                  <h4 className="font-bold text-lg text-gray-800">Escolha o tipo de entrega</h4>
+                 
+                  {[
+                    { tipo: 'PAC (Econômica)', valor: 15.00, prazo: 7 },
+                    { tipo: 'SEDEX (Expressa)', valor: 35.00, prazo: 3 }
+                  ].map(frete => (
+                    <label key={frete.tipo} className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.frete?.tipo === frete.tipo ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
+                      <div className="flex items-center gap-3">
+                        <input type="radio" name="frete" className="w-4 h-4 text-green-600"
+                          checked={checkoutData.frete?.tipo === frete.tipo}
+                          onChange={() => setCheckoutData({...checkoutData, frete})}
+                        />
+                        <div>
+                          <p className="font-bold text-gray-900 flex items-center gap-2"><Truck className="w-4 h-4 text-gray-500"/> {frete.tipo}</p>
+                          <p className="text-sm text-gray-600">Chega em até {frete.prazo} dias úteis</p>
+                        </div>
+                      </div>
+                      <span className="font-bold text-green-700">R$ {frete.valor.toFixed(2)}</span>
+                    </label>
+                  ))}
+
+                  <div className="pt-4 flex justify-between border-t mt-4">
+                    <button onClick={() => setCheckoutStep(1)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
+                    <button disabled={!checkoutData.frete} onClick={() => setCheckoutStep(3)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">
+                      Continuar para Pagamento
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PASSO 3: PAGAMENTO (Cartão Simulado) */}
+              {checkoutStep === 3 && (
+                <div className="space-y-6">
+                 
+                  {/* Resumo */}
+                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-blue-800 font-medium">Resumo do Pedido (Itens + Frete)</p>
+                      <p className="font-bold text-xl text-slate-900">Total a pagar: R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)}</p>
+                    </div>
+                    <Box className="w-8 h-8 text-blue-300" />
+                  </div>
+
+                  {/* Form de Pagamento */}
+                  <div>
+                    <h4 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2"><CreditCard className="w-5 h-5"/> Pagamento com Cartão</h4>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label>
+                        <input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label>
+                        <input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label>
+                          <input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label>
+                          <input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700">Parcelamento</label>
+                        <select value={checkoutData.cartao.parcelas} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, parcelas: e.target.value}})} className="w-full px-4 py-2 border rounded-lg">
+                          <option value={1}>1x de R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)} sem juros</option>
+                          <option value={2}>2x de R$ {((cartTotal + checkoutData.frete.valor)/2).toFixed(2)} sem juros</option>
+                          <option value={3}>3x de R$ {((cartTotal + checkoutData.frete.valor)/3).toFixed(2)} sem juros</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 flex justify-between border-t">
+                    <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
+                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading || !checkoutData.cartao.numero} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:opacity-50">
+                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />} Confirmar Pagamento
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DO FILTRO LATERAL AVANÇADO (Ocultado para brevidade) */}
       {isFilterSidebarOpen && (
         <div className="fixed inset-0 z-50 overflow-hidden">
           <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsFilterSidebarOpen(false)} />
@@ -1032,7 +1309,6 @@ export default function App() {
            
             <div className="p-4 space-y-6">
              
-              {/* Filtro Binário (Personalizável) */}
               <div className="bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between cursor-pointer" onClick={() => setFiltrosAvancados({...filtrosAvancados, personalizavel: !filtrosAvancados.personalizavel})}>
                 <span className="text-sm font-bold text-green-900">Aceita Personalização</span>
                 <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'bg-green-500' : ''}`}>
@@ -1040,7 +1316,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Filtro de Preço */}
               <div>
                 <h3 className="text-sm font-bold text-gray-900 mb-2">Faixa de Preço (R$)</h3>
                 <div className="flex items-center gap-2">
@@ -1050,7 +1325,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Filtro de Gênero */}
               {opcoesFiltro.generos.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Género / Público</h3>
@@ -1062,7 +1336,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Temporada */}
               {opcoesFiltro.temporadas.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Temporada</h3>
@@ -1074,7 +1347,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Marca */}
               {opcoesFiltro.marcas.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Marca / Fornecedor</h3>
@@ -1086,7 +1358,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Tipo de Uniforme */}
               {opcoesFiltro.tipos.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Edição</h3>
@@ -1101,7 +1372,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Ligas */}
               {opcoesFiltro.ligas.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Ligas</h3>
@@ -1116,7 +1386,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Países */}
               {opcoesFiltro.paises.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">País</h3>
@@ -1131,7 +1400,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Filtro de Tamanhos */}
               <div>
                 <h3 className="text-sm font-bold text-gray-900 mb-2">Tamanhos</h3>
                 <div className="flex flex-wrap gap-2">
@@ -1143,7 +1411,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Filtro de Cores */}
               {opcoesFiltro.cores.length > 0 && (
                 <div>
                   <h3 className="text-sm font-bold text-gray-900 mb-2">Cores Predominantes</h3>
@@ -1172,9 +1439,7 @@ export default function App() {
   );
 }
 
-// ==========================================
-// COMPONENTE DO PRODUTO (AGORA COM CARROSSEL DE MÚLTIPLAS IMAGENS)
-// ==========================================
+// COMPONENTE DO PRODUTO (Mantido igual)
 function ProductCard({ produto, onAdd }) {
   const [tamanho, setTamanho] = useState('M');
   const [imgIndex, setImgIndex] = useState(0);
@@ -1206,7 +1471,6 @@ function ProductCard({ produto, onAdd }) {
         </span>
       )}
      
-      {/* CARROSSEL DE IMAGENS */}
       <div className="relative w-full h-72 bg-gray-50 flex items-center justify-center">
         {listaImagens.length > 0 ? (
           <img src={listaImagens[imgIndex]} className="w-full h-full object-cover transition-opacity duration-300" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
@@ -1214,16 +1478,14 @@ function ProductCard({ produto, onAdd }) {
           <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
         )}
        
-        {/* Controlos do Carrossel (Apenas se houver mais de 1 imagem) */}
         {listaImagens.length > 1 && (
           <>
             <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
             <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
            
-            {/* Pontos do Carrossel (Dots) */}
             <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
               {listaImagens.map((_, idx) => (
-                <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === imgIndex ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />
+                <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === idx ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />
               ))}
             </div>
           </>

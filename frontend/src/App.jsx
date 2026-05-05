@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, QrCode, Barcode } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -125,13 +125,14 @@ export default function App() {
   const [isAdminLoading, setIsAdminLoading] = useState(false);
   const [todosPedidos, setTodosPedidos] = useState([]);
 
+  // ==========================================
+  // CHECKOUT STATE
+  // ==========================================
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState(1); 
   const [checkoutData, setCheckoutData] = useState({
     endereco: null, 
-    frete: null, 
-    metodoPagamento: 'cartao',
-    cartao: { nome: '', numero: '', validade: '', cvv: '', parcelas: 1 }
+    frete: null
   });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
@@ -141,6 +142,26 @@ export default function App() {
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
+  // ==========================================
+  // FEEDBACK DE SUCESSO DA STRIPE
+  // ==========================================
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const statusPagamento = urlParams.get('pagamento');
+    
+    if (statusPagamento === 'sucesso') {
+      mostrarNotificacao('Pagamento Aprovado! 🎉', 'O seu pagamento foi processado com sucesso. O pedido será enviado em breve!');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setCart([]);
+    } else if (statusPagamento === 'falha') {
+      mostrarNotificacao('Pagamento Cancelado ❌', 'O pagamento não foi concluído. Pode tentar novamente na secção dos seus pedidos.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // ==========================================
+  // LISTENER EM TEMPO REAL DE PEDIDOS
+  // ==========================================
   useEffect(() => {
     if (!appUser || !dbFrontend) return;
     if (appUser.email === 'admin@futgo.com') return;
@@ -163,7 +184,7 @@ export default function App() {
         if (change.type === 'added') {
           previousStatuses.set(pedido.id_pedido, pedido.status);
           if (!isInitialLoad) {
-            mostrarNotificacao('Pedido Confirmado! ⚽', `O seu pedido ${pedido.id_pedido} foi registado e está em processamento.`);
+            mostrarNotificacao('Pedido Registado! ⚽', `Pedido ${pedido.id_pedido} criado.`);
           }
         }
         
@@ -171,7 +192,7 @@ export default function App() {
           const oldStatus = previousStatuses.get(pedido.id_pedido);
           if (oldStatus !== pedido.status) {
             previousStatuses.set(pedido.id_pedido, pedido.status);
-            mostrarNotificacao(`Atualização no Pedido!`, `O status do pedido ${pedido.id_pedido} mudou para: ${pedido.status}`);
+            mostrarNotificacao(`Atualização no Pedido!`, `Status mudou para: ${pedido.status}`);
           }
         }
       });
@@ -239,7 +260,7 @@ export default function App() {
       await new Promise(resolve => setTimeout(resolve, 2000));
       const token = await result.user.getIdToken();
       const fallbackEmail = result.user.email || result.user.providerData[0]?.email || "";
-      if (!fallbackEmail) throw new Error("O seu provedor não partilhou o seu e-mail real.");
+      if (!fallbackEmail) throw new Error("O seu provedor não partilhou o e-mail.");
       const fallbackName = result.user.displayName || result.user.providerData[0]?.displayName || "Utilizador";
       
       const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
@@ -405,32 +426,48 @@ export default function App() {
     setIsCheckoutOpen(true); setCheckoutStep(1); setCheckoutErro('');
   };
 
+  // ==========================================
+  // FUNÇÃO FINALIZAR COMPRA E REDIRECIONAR STRIPE
+  // ==========================================
   const handleFinalizarCompra = async () => {
     setCheckoutLoading(true);
     setCheckoutErro('');
     try {
-      const dadosPagamento = { metodo: checkoutData.metodoPagamento, ...(checkoutData.metodoPagamento === 'cartao' ? checkoutData.cartao : {}) };
       const payload = {
         itens: cart.map(i => ({ id: i.id, nome_camisa: i.nome_camisa, tamanho: i.tamanho, quantidade: i.quantidade, preco: i.preco })),
-        endereco_id: checkoutData.endereco.id_endereco, frete: checkoutData.frete, pagamento: dadosPagamento, total: cartTotal + checkoutData.frete.valor
+        endereco_id: checkoutData.endereco.id_endereco, 
+        frete: checkoutData.frete, 
+        total: cartTotal + checkoutData.frete.valor
       };
       
-      const res = await fetch(`${API_BASE_URL}/pedidos/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, body: JSON.stringify(payload) });
+      const res = await fetch(`${API_BASE_URL}/pedidos/`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, 
+        body: JSON.stringify(payload) 
+      });
+      
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || 'Falha ao finalizar o pedido.');
+      if (!res.ok) throw new Error(data.erro || 'Falha ao processar o pedido.');
       
-      setCart([]); setIsCheckoutOpen(false);
+      if (data.pagamento_url) {
+        window.location.href = data.pagamento_url;
+      } else {
+        throw new Error("Erro de Integração: Link da Stripe não gerado. Verifique o STRIPE_SECRET_KEY no .env do backend.");
+      }
       
-      // ALERTA ATUALIZADO AQUI
-      alert(`Pedido Realizado com Sucesso!\nO seu número de pedido é: ${data.pedido.id_pedido}\n\nUma simulação de Nota Fiscal (Recibo) foi enviada para o seu e-mail!`);
-      
-    } catch (error) { setCheckoutErro(error.message); } finally { setCheckoutLoading(false); }
+    } catch (error) { 
+      setCheckoutErro(error.message); 
+      setCheckoutLoading(false);
+    } 
   };
 
   const fetchTodosPedidos = async () => { 
     try { 
       const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} }); 
-      if (res.ok) { const data = await res.json(); setTodosPedidos(data); }
+      if (res.ok) {
+        const data = await res.json();
+        setTodosPedidos(data); 
+      }
     } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); } 
   };
 
@@ -559,8 +596,6 @@ export default function App() {
       return termosBusca.every(termo => atributosDaCamisola.includes(termo));
     });
   }, [filtroCategoria, busca, produtos, filtrosAvancados]);
-
-  const isPagamentoValido = checkoutData.metodoPagamento !== 'cartao' || (checkoutData.metodoPagamento === 'cartao' && checkoutData.cartao.numero && checkoutData.cartao.nome && checkoutData.cartao.validade && checkoutData.cartao.cvv);
 
   return (
     <div className="min-h-screen w-full bg-gray-50 font-sans text-gray-800 flex flex-col relative">
@@ -818,14 +853,7 @@ export default function App() {
                             <p className="font-mono font-bold text-slate-900">{pedido.id_pedido}</p>
                           </div>
                           <div className="text-right">
-                            <span className="text-xs text-gray-500 flex items-center gap-1 justify-end">
-                              Status 
-                              {pedido.pagamento?.metodo && (
-                                <span className="bg-gray-200 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold text-gray-600">
-                                  Via {pedido.pagamento.metodo}
-                                </span>
-                              )}
-                            </span>
+                            <span className="text-xs text-gray-500 flex items-center gap-1 justify-end">Status</span>
                             <p className={`font-bold text-sm px-2 py-1 rounded-full mt-1 ${pedido.status === 'Entregue' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{pedido.status}</p>
                           </div>
                         </div>
@@ -874,7 +902,7 @@ export default function App() {
                         <tr>
                           <th className="px-4 py-3">ID / Data</th>
                           <th className="px-4 py-3">Cliente (ID)</th>
-                          <th className="px-4 py-3">Total / Pgto</th>
+                          <th className="px-4 py-3">Total</th>
                           <th className="px-4 py-3 text-right">Status</th>
                         </tr>
                       </thead>
@@ -889,10 +917,7 @@ export default function App() {
                                 <span className="text-xs text-gray-500">{new Date(ped.data_pedido).toLocaleString()}</span>
                               </td>
                               <td className="px-4 py-3 text-gray-600 font-mono text-xs">{ped.id_usuario}</td>
-                              <td className="px-4 py-3">
-                                <span className="font-bold text-slate-900 block">R$ {ped.total.toFixed(2)}</span>
-                                <span className="text-xs text-gray-500 uppercase">{ped.pagamento?.metodo || 'N/A'}</span>
-                              </td>
+                              <td className="px-4 py-3 font-bold text-slate-900">R$ {ped.total.toFixed(2)}</td>
                               <td className="px-4 py-3 text-right">
                                 <select 
                                   value={ped.status} 
@@ -902,8 +927,8 @@ export default function App() {
                                     ped.status === 'Cancelado' ? 'bg-red-50 text-red-700 border-red-200' :
                                     'bg-blue-50 text-blue-700 border-blue-200'
                                   }`}>
-                                  <option value="Recebido">Recebido</option>
                                   <option value="Aguardando Pagamento">Aguardando Pagamento</option>
+                                  <option value="Recebido">Recebido / Pago</option>
                                   <option value="Em Separação">Em Separação</option>
                                   <option value="Enviado">Enviado</option>
                                   <option value="Entregue">Entregue</option>
@@ -994,7 +1019,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Liga</label>
-                        <input type="text" value={prodLiga} onChange={e => setLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
+                        <input type="text" value={prodLiga} onChange={e => setProdLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">Marca / Fornecedor</label>
@@ -1150,9 +1175,9 @@ export default function App() {
               <button onClick={() => setIsCheckoutOpen(false)} className="text-gray-400 hover:text-white"><X /></button>
             </div>
             <div className="flex border-b border-gray-200 bg-gray-50">
-              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 1 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>1. Endereço</div>
-              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 2 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>2. Entrega</div>
-              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 3 ? 'border-green-500 text-green-700' : 'border-transparent text-gray-400'}`}>3. Pagamento</div>
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 1 ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-400'}`}>1. Endereço</div>
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 2 ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-400'}`}>2. Entrega</div>
+              <div className={`flex-1 py-3 text-center text-sm font-bold border-b-2 ${checkoutStep >= 3 ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-400'}`}>3. Pagamento Seguro</div>
             </div>
 
             <div className="p-6 overflow-y-auto flex-1">
@@ -1170,8 +1195,8 @@ export default function App() {
                     </div>
                   ) : (
                     enderecos.map(end => (
-                      <label key={end.id_endereco} className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.endereco?.id_endereco === end.id_endereco ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
-                        <input type="radio" name="endereco" className="mt-1 w-4 h-4 text-green-600" checked={checkoutData.endereco?.id_endereco === end.id_endereco} onChange={() => setCheckoutData({...checkoutData, endereco: end})} />
+                      <label key={end.id_endereco} className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.endereco?.id_endereco === end.id_endereco ? 'border-blue-500 bg-blue-50' : 'hover:bg-gray-50'}`}>
+                        <input type="radio" name="endereco" className="mt-1 w-4 h-4 text-blue-600" checked={checkoutData.endereco?.id_endereco === end.id_endereco} onChange={() => setCheckoutData({...checkoutData, endereco: end})} />
                         <div>
                           <p className="font-bold text-gray-900">{end.rua}, {end.numero}</p>
                           <p className="text-sm text-gray-600">{end.bairro} - {end.cidade}/{end.estado} | CEP: {end.cep}</p>
@@ -1182,7 +1207,7 @@ export default function App() {
 
                   {enderecos.length > 0 && (
                     <div className="pt-2 pb-4">
-                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="text-sm font-bold text-green-600 hover:underline">+ Cadastrar um novo endereço</button>
+                      <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="text-sm font-bold text-blue-600 hover:underline">+ Cadastrar um novo endereço</button>
                     </div>
                   )}
 
@@ -1199,15 +1224,15 @@ export default function App() {
                     { tipo: 'PAC (Econômica)', valor: 15.00, prazo: 7 },
                     { tipo: 'SEDEX (Expressa)', valor: 35.00, prazo: 3 }
                   ].map(frete => (
-                    <label key={frete.tipo} className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.frete?.tipo === frete.tipo ? 'border-green-500 bg-green-50' : 'hover:bg-gray-50'}`}>
+                    <label key={frete.tipo} className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.frete?.tipo === frete.tipo ? 'border-blue-500 bg-blue-50' : 'hover:bg-gray-50'}`}>
                       <div className="flex items-center gap-3">
-                        <input type="radio" name="frete" className="w-4 h-4 text-green-600" checked={checkoutData.frete?.tipo === frete.tipo} onChange={() => setCheckoutData({...checkoutData, frete})} />
+                        <input type="radio" name="frete" className="w-4 h-4 text-blue-600" checked={checkoutData.frete?.tipo === frete.tipo} onChange={() => setCheckoutData({...checkoutData, frete})} />
                         <div>
                           <p className="font-bold text-gray-900 flex items-center gap-2"><Truck className="w-4 h-4 text-gray-500"/> {frete.tipo}</p>
                           <p className="text-sm text-gray-600">Chega em até {frete.prazo} dias úteis</p>
                         </div>
                       </div>
-                      <span className="font-bold text-green-700">R$ {frete.valor.toFixed(2)}</span>
+                      <span className="font-bold text-blue-700">R$ {frete.valor.toFixed(2)}</span>
                     </label>
                   ))}
                   <div className="pt-4 flex justify-between border-t mt-4">
@@ -1220,84 +1245,29 @@ export default function App() {
               {checkoutStep === 3 && (
                 <div className="space-y-6">
                   {/* Resumo */}
-                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 flex items-center justify-between">
+                  <div className="bg-blue-50 p-5 rounded-xl border border-blue-100 flex items-center justify-between shadow-sm">
                     <div>
-                      <p className="text-sm text-blue-800 font-medium">Resumo do Pedido (Itens + Frete)</p>
-                      <p className="font-bold text-xl text-slate-900">Total a pagar: R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)}</p>
+                      <p className="text-sm text-blue-800 font-medium mb-1">Resumo do Pedido</p>
+                      <p className="font-extrabold text-2xl text-slate-900">Total a pagar: R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)}</p>
                     </div>
-                    <Box className="w-8 h-8 text-blue-300" />
+                    <Box className="w-10 h-10 text-blue-300" />
                   </div>
 
-                  <div>
-                    <h4 className="font-bold text-lg text-gray-800 mb-4">Escolha a Forma de Pagamento</h4>
-                    
-                    {/* Botões de Seleção de Pagamento */}
-                    <div className="grid grid-cols-3 gap-3 mb-6">
-                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'cartao' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
-                        <CreditCard className="w-6 h-6 mb-2" />
-                        <span className="text-sm font-bold">Cartão</span>
-                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'cartao'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'cartao'})} />
-                      </label>
-
-                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'pix' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
-                        <QrCode className="w-6 h-6 mb-2" />
-                        <span className="text-sm font-bold">PIX</span>
-                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'pix'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'pix'})} />
-                      </label>
-
-                      <label className={`flex flex-col items-center justify-center p-3 border rounded-lg cursor-pointer transition-colors ${checkoutData.metodoPagamento === 'boleto' ? 'border-green-500 bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-500'}`}>
-                        <Barcode className="w-6 h-6 mb-2" />
-                        <span className="text-sm font-bold">Boleto</span>
-                        <input type="radio" name="metodoPagamento" className="hidden" checked={checkoutData.metodoPagamento === 'boleto'} onChange={() => setCheckoutData({...checkoutData, metodoPagamento: 'boleto'})} />
-                      </label>
+                  <div className="bg-white border-2 border-gray-200 rounded-xl p-8 text-center space-y-4">
+                    <div className="flex justify-center gap-4 mb-4">
+                      <ShieldCheck className="w-12 h-12 text-blue-500" />
                     </div>
-
-                    {/* Vistas Condicionais de Pagamento */}
-                    {checkoutData.metodoPagamento === 'cartao' && (
-                      <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Nome do Titular *</label><input type="text" value={checkoutData.cartao.nome} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, nome: e.target.value}})} className="w-full px-4 py-2 border rounded-lg uppercase" placeholder="JOÃO M SILVA" /></div>
-                        <div><label className="block text-sm font-medium mb-1 text-gray-700">Número do Cartão *</label><input type="text" maxLength={16} value={checkoutData.cartao.numero} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, numero: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg tracking-widest font-mono" placeholder="0000 0000 0000 0000" /></div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div><label className="block text-sm font-medium mb-1 text-gray-700">Validade *</label><input type="text" maxLength={5} value={checkoutData.cartao.validade} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, validade: e.target.value}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="MM/AA" /></div>
-                          <div><label className="block text-sm font-medium mb-1 text-gray-700">CVV *</label><input type="text" maxLength={4} value={checkoutData.cartao.cvv} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, cvv: e.target.value.replace(/\D/g, '')}})} className="w-full px-4 py-2 border rounded-lg text-center" placeholder="123" /></div>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700">Parcelamento</label>
-                          <select value={checkoutData.cartao.parcelas} onChange={(e) => setCheckoutData({...checkoutData, cartao: {...checkoutData.cartao, parcelas: e.target.value}})} className="w-full px-4 py-2 border rounded-lg">
-                            <option value={1}>1x de R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)} sem juros</option>
-                            <option value={2}>2x de R$ {((cartTotal + checkoutData.frete.valor)/2).toFixed(2)} sem juros</option>
-                            <option value={3}>3x de R$ {((cartTotal + checkoutData.frete.valor)/3).toFixed(2)} sem juros</option>
-                          </select>
-                        </div>
-                      </div>
-                    )}
-
-                    {checkoutData.metodoPagamento === 'pix' && (
-                      <div className="bg-white border-2 border-dashed border-gray-300 rounded-lg p-6 text-center space-y-4 animate-in fade-in zoom-in-95 duration-300">
-                        <div className="bg-gray-100 p-4 rounded-2xl inline-block shadow-inner">
-                           <QrCode className="w-24 h-24 text-gray-800 mx-auto" />
-                        </div>
-                        <p className="text-sm text-gray-600 max-w-sm mx-auto">Ao confirmar o pedido, um <strong>código "Copia e Cola"</strong> e um <strong>QR Code</strong> serão gerados para o pagamento.</p>
-                        <div className="bg-green-100 text-green-800 px-4 py-2 rounded-full text-xs font-bold inline-block mt-2">
-                           ⚡ Aprovação Imediata
-                        </div>
-                      </div>
-                    )}
-
-                    {checkoutData.metodoPagamento === 'boleto' && (
-                      <div className="bg-white border-2 border-dashed border-gray-300 rounded-lg p-6 text-center space-y-4 animate-in fade-in zoom-in-95 duration-300">
-                        <Barcode className="w-24 h-24 mx-auto text-gray-400" />
-                        <p className="text-sm text-gray-600 max-w-sm mx-auto">O seu boleto será gerado após clicar no botão abaixo. Pode imprimi-lo ou pagar pelo site do seu banco.</p>
-                        <p className="text-xs text-gray-400 font-bold">Prazo de compensação: até 3 dias úteis.</p>
-                      </div>
-                    )}
+                    <h4 className="font-bold text-xl text-gray-800">Checkout Seguro Criptografado</h4>
+                    <p className="text-sm text-gray-600 max-w-md mx-auto">
+                      Ao clicar no botão abaixo, será redirecionado para a página oficial de checkout, onde poderá introduzir os seus dados de pagamento com total segurança.
+                    </p>
                   </div>
 
-                  <div className="pt-4 flex justify-between border-t">
+                  <div className="pt-4 flex justify-between border-t mt-6">
                     <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
-                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading || !isPagamentoValido} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-md disabled:opacity-50">
-                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />} 
-                      Confirmar Pedido
+                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-md disabled:opacity-50">
+                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ExternalLink className="w-5 h-5" />} 
+                      Ir para o Pagamento
                     </button>
                   </div>
                 </div>
@@ -1307,7 +1277,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DO FILTRO LATERAL AVANÇADO (Ocultado para brevidade) */}
+      {/* MODAL DO FILTRO LATERAL AVANÇADO */}
       {isFilterSidebarOpen && (
         <div className="fixed inset-0 z-50 overflow-hidden">
           <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsFilterSidebarOpen(false)} />

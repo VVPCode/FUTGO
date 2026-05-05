@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     CheckAuthView,
+    RecomendacoesView,
     SendOTPView,
     LoginOTPView,
     RegisterView,
@@ -51,6 +52,11 @@ urlpatterns = [
     # ==========================
     path('pedidos/', PedidoCreateView.as_view(), name='pedido_create'),
     path('pedidos/user/<int:id_usuario>/', PedidoUserListView.as_view(), name='pedido_user_list'),
+   
+    # ==========================
+    # ROTA DE SUGESTÃO DE PRODUTOS
+    # ==========================
+    path('recomendacoes/', RecomendacoesView.as_view(), name='recomendacoes'),
    
     # ==========================
     # ROTAS GESTÃO ADMIN DE PEDIDOS

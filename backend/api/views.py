@@ -3,6 +3,7 @@ import os
 import time
 import random
 import uuid
+import stripe  # <-- NOVA IMPORTAÇÃO: Stripe no lugar de mercadopago
 from datetime import datetime
 from django.conf import settings
 from django.core.mail import send_mail
@@ -14,8 +15,12 @@ from rest_framework import status
 from firebase_admin import auth as firebase_auth
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-# IMPORTAÇÃO DO TWILIO
+# IMPORTAÇÃO DO TWILIO E DOTENV
 from twilio.rest import Client
+from dotenv import load_dotenv
+
+# FORÇA A LEITURA DO FICHEIRO .env AQUI NO VIEWS!
+load_dotenv()
 
 from .firebase_config import db
 
@@ -122,6 +127,16 @@ class SendOTPView(APIView):
 
             otp_code = str(random.randint(100000, 999999))
             db.collection('otps').document(identificador).set({'otp': otp_code, 'timestamp': time.time()})
+           
+            # ==============================================================
+            # NOVO: IMPRIMIR O CÓDIGO NO TERMINAL PARA TODOS OS CASOS
+            # ==============================================================
+            print("\n" + "="*50)
+            print(f"🔑 [FUTGO] NOVO CÓDIGO OTP: {otp_code}")
+            print(f"🎯 Destino: {identificador}")
+            print(f"📡 Método:  {metodo.upper()}")
+            print("="*50 + "\n")
+            # ==============================================================
 
             if metodo == 'email':
                 try:
@@ -305,8 +320,9 @@ class ProdutoDetailView(APIView):
         except Exception as e: return Response({"erro": str(e)}, status=500)
 
 # ==========================================
-# GESTÃO DE PEDIDOS (E ENVIO DE NF)
+# GESTÃO DE PEDIDOS E PAGAMENTO (STRIPE)
 # ==========================================
+
 class PedidoCreateView(APIView):
     def post(self, request):
         try:
@@ -317,93 +333,97 @@ class PedidoCreateView(APIView):
             dados = request.data
             id_pedido = f"PED-{int(time.time())}"
            
+            # 1. Preparar os dados do Pedido
             novo_pedido = {
                 "id_pedido": id_pedido,
                 "id_usuario": int(user_id),
                 "itens": dados.get('itens', []),
                 "endereco_id": dados.get('endereco_id'),
                 "frete": dados.get('frete', {}),
-                "pagamento": dados.get('pagamento', {}),
                 "total": float(dados.get('total', 0.0)),
-                "status": "Recebido",
+                "status": "Aguardando Pagamento",
                 "data_pedido": datetime.utcnow().isoformat() + "Z"
             }
            
-            # 1. Salva o pedido no Firestore
+            # 2. Salvar no Firestore
             db.collection('pedidos').document(id_pedido).set(novo_pedido)
            
+            # 3. Buscar e-mail do usuário
+            user_email = ""
+            user_doc = db.collection('usuarios').document(str(user_id)).get()
+            if user_doc.exists:
+                user_email = user_doc.to_dict().get('email', '')
+
             # ==========================================
-            # 2. GERAÇÃO E ENVIO DE E-MAIL (SIMULAÇÃO NF)
+            # 4. INTEGRAÇÃO STRIPE (GERAR LINK DE CHECKOUT)
             # ==========================================
-            try:
-                # Busca os dados do usuário para obter o e-mail
-                user_doc = db.collection('usuarios').document(str(user_id)).get()
-                if user_doc.exists:
-                    user_data = user_doc.to_dict()
-                    user_email = user_data.get('email', '')
-                    user_nome = user_data.get('nome', 'Cliente')
-                   
-                    if user_email and '@' in user_email:
-                        # Monta a lista de itens comprados em HTML
-                        itens_html = "".join([
-                            f"<tr><td style='padding: 8px; border-bottom: 1px solid #ddd;'>{item['quantidade']}x {item['nome_camisa']} ({item['tamanho']})</td>"
-                            f"<td style='padding: 8px; border-bottom: 1px solid #ddd; text-align: right;'>R$ {float(item['preco']):.2f}</td></tr>"
-                            for item in novo_pedido['itens']
-                        ])
-                       
-                        frete_valor = float(novo_pedido['frete'].get('valor', 0.0))
-                        total_pago = float(novo_pedido['total'])
-                        metodo_pgto = novo_pedido['pagamento'].get('metodo', 'N/A').upper()
-                       
-                        assunto = f"FUTGO! - Confirmação e Recibo do Pedido {id_pedido}"
-                       
-                        # Corpo do E-mail em HTML Bonito (Simulando uma Nota Fiscal Eletrônica)
-                        mensagem_html = f"""
-                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
-                            <div style="background-color: #0f172a; padding: 20px; text-align: center;">
-                                <h1 style="color: #22c55e; margin: 0; font-size: 24px;">FUTGO!</h1>
-                                <p style="color: #fff; margin: 5px 0 0 0;">Obrigado pela sua compra, {user_nome}!</p>
-                            </div>
-                           
-                            <div style="padding: 20px;">
-                                <h2 style="color: #0f172a; font-size: 18px; border-bottom: 2px solid #22c55e; padding-bottom: 5px;">Recibo Eletrônico (Simulação NF)</h2>
-                                <p><strong>Nº do Pedido:</strong> {id_pedido}</p>
-                                <p><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
-                                <p><strong>Forma de Pagamento:</strong> {metodo_pgto}</p>
-                               
-                                <h3 style="margin-top: 20px; font-size: 16px;">Itens do Pedido:</h3>
-                                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-                                    {itens_html}
-                                </table>
-                               
-                                <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; text-align: right;">
-                                    <p style="margin: 0 0 5px 0;">Subtotal Itens: R$ {(total_pago - frete_valor):.2f}</p>
-                                    <p style="margin: 0 0 5px 0;">Frete: R$ {frete_valor:.2f}</p>
-                                    <p style="margin: 10px 0 0 0; font-size: 18px; font-weight: bold; color: #0f172a;">Total Pago: R$ {total_pago:.2f}</p>
-                                </div>
-                               
-                                <p style="font-size: 12px; color: #666; margin-top: 30px; text-align: center;">
-                                    * Este é um recibo gerado automaticamente para simular a emissão de uma Nota Fiscal. A NF-e oficial seria emitida neste momento em um ambiente de produção.
-                                </p>
-                            </div>
-                        </div>
-                        """
-                       
-                        mensagem_texto = f"Olá {user_nome},\nSeu pedido {id_pedido} foi confirmado.\nTotal: R$ {total_pago:.2f}\nForma de Pagamento: {metodo_pgto}"
-                       
-                        # Envia o E-mail usando o Django Core Mail
-                        send_mail(
-                            subject=assunto,
-                            message=mensagem_texto,
-                            from_email=settings.EMAIL_HOST_USER,
-                            recipient_list=[user_email],
-                            html_message=mensagem_html,
-                            fail_silently=True # True para não quebrar o site se o e-mail não for enviado
-                        )
-            except Exception as e:
-                print(f"Erro no envio da NF por e-mail: {str(e)}")
            
-            return Response({"mensagem": "Pedido realizado com sucesso!", "pedido": novo_pedido}, status=201)
+            # IMPRIME NO TERMINAL PARA DEBUG
+            stripe_secret_key = os.environ.get('STRIPE_SECRET_KEY', '')
+            print("\n" + "="*50)
+            print("💳 TENTANDO CRIAR PAGAMENTO NA STRIPE")
+            print(f"Token do .env encontrado? {'SIM' if stripe_secret_key else 'NÃO (Está vazio!)'}")
+           
+            pagamento_url = None
+           
+            if stripe_secret_key:
+                try:
+                    stripe.api_key = stripe_secret_key
+                   
+                    line_items = []
+                   
+                    # A Stripe trabalha com cêntimos. Ex: R$ 50.00 = 5000 cêntimos
+                    for item in novo_pedido['itens']:
+                        line_items.append({
+                            'price_data': {
+                                'currency': 'brl',
+                                'product_data': {
+                                    'name': f"{item['nome_camisa']} ({item['tamanho']})",
+                                },
+                                'unit_amount': int(float(item['preco']) * 100),
+                            },
+                            'quantity': int(item['quantidade']),
+                        })
+                   
+                    # Adicionar Frete
+                    if float(novo_pedido['frete'].get('valor', 0)) > 0:
+                        line_items.append({
+                            'price_data': {
+                                'currency': 'brl',
+                                'product_data': {
+                                    'name': f"Frete - {novo_pedido['frete'].get('tipo', 'Envio')}",
+                                },
+                                'unit_amount': int(float(novo_pedido['frete']['valor']) * 100),
+                            },
+                            'quantity': 1,
+                        })
+
+                    # Criar Sessão de Checkout
+                    checkout_session = stripe.checkout.Session.create(
+                        payment_method_types=['card','boleto'],
+                        line_items=line_items,
+                        mode='payment',
+                        customer_email=user_email if '@' in user_email else None,
+                        success_url='http://localhost:5173/?pagamento=sucesso',
+                        cancel_url='http://localhost:5173/?pagamento=falha',
+                        client_reference_id=id_pedido
+                    )
+                   
+                    pagamento_url = checkout_session.url
+                    print(f"✅ Link gerado com sucesso: {pagamento_url}")
+                       
+                except Exception as e:
+                    print(f"🚨 ERRO FATAL NA INTEGRAÇÃO STRIPE: {str(e)}")
+            else:
+                print("⚠️ ERRO: O código não tentou ligar à Stripe porque a chave STRIPE_SECRET_KEY está em branco.")
+            print("="*50 + "\n")
+
+            return Response({
+                "mensagem": "Pedido gerado!",
+                "pedido": novo_pedido,
+                "pagamento_url": pagamento_url
+            }, status=201)
+           
         except Exception as e:
             return Response({"erro": str(e)}, status=500)
 

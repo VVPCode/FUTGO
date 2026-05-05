@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -126,25 +126,80 @@ export default function App() {
   const [todosPedidos, setTodosPedidos] = useState([]);
 
   // ==========================================
-  // CHECKOUT STATE
+  // ESTADOS DE CHECKOUT E RECOMENDAÇÕES
   // ==========================================
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState(1); 
-  const [checkoutData, setCheckoutData] = useState({
-    endereco: null, 
-    frete: null
-  });
+  const [checkoutData, setCheckoutData] = useState({ endereco: null, frete: null });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
   
   const [pedidosUsuario, setPedidosUsuario] = useState([]); 
   const [notificacaoInApp, setNotificacaoInApp] = useState(null); 
+  
+  // NOVO ESTADO: Sugestões de Upsell no Carrinho
+  const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
   // ==========================================
-  // FEEDBACK DE SUCESSO DA STRIPE
+  // EFEITO: BUSCAR RECOMENDAÇÕES (GARANTINDO 3+)
   // ==========================================
+  useEffect(() => {
+    const fetchRecomendacoes = async () => {
+      if (cart.length > 0 && isCartOpen) {
+        const baseItem = cart[cart.length - 1]; // Usa o último adicionado
+        
+        try {
+          const res = await fetch(`${API_BASE_URL}/recomendacoes/?produto_id=${baseItem.id}`);
+          if (res.ok) {
+            const data = await res.json();
+            
+            // Remove produtos que já estão no carrinho para não sugerir em duplicado
+            const sugestoesLimpidas = (data || []).filter(rec => !cart.some(itemCart => itemCart.id === rec.id));
+            
+            // Se a API retornou menos de 3 sugestões após a limpeza, usamos o nosso super preenchedor
+            if (sugestoesLimpidas.length >= 3) {
+              setRecomendacoesCarrinho(sugestoesLimpidas.slice(0, 4));
+            } else {
+              preencherRecomendacoes(baseItem, sugestoesLimpidas);
+            }
+          } else {
+            preencherRecomendacoes(baseItem, []);
+          }
+        } catch (error) {
+          preencherRecomendacoes(baseItem, []);
+        }
+      } else {
+        setRecomendacoesCarrinho([]);
+      }
+    };
+
+    fetchRecomendacoes();
+  }, [cart, isCartOpen, produtos]);
+
+  // Esta função garante que a vitrine tem sempre sugestões suficientes, misturando API com dados locais
+  const preencherRecomendacoes = (baseItem, sugestoesIniciais) => {
+    const idsJaSugeridos = sugestoesIniciais.map(s => s.id);
+    
+    // Todos os produtos que não são o próprio e que não estão no carrinho nem na lista inicial
+    let disponiveis = produtos.filter(p => 
+      p.id !== baseItem.id && 
+      !cart.some(itemCart => itemCart.id === p.id) &&
+      !idsJaSugeridos.includes(p.id)
+    );
+
+    // Primeiro tentamos preencher com produtos da mesma categoria
+    let mesmaCategoria = disponiveis.filter(p => p.categoria === baseItem.categoria);
+    
+    // Depois, se ainda faltar espaço, atiramos qualquer outro produto para a mistura
+    let outrasCategorias = disponiveis.filter(p => p.categoria !== baseItem.categoria);
+
+    // Junta tudo e corta nos 4 (garante pelo menos 3, desde que haja inventário)
+    let recsFinais = [...sugestoesIniciais, ...mesmaCategoria, ...outrasCategorias];
+    setRecomendacoesCarrinho(recsFinais.slice(0, 4));
+  };
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const statusPagamento = urlParams.get('pagamento');
@@ -159,9 +214,6 @@ export default function App() {
     }
   }, []);
 
-  // ==========================================
-  // LISTENER EM TEMPO REAL DE PEDIDOS
-  // ==========================================
   useEffect(() => {
     if (!appUser || !dbFrontend) return;
     if (appUser.email === 'admin@futgo.com') return;
@@ -426,9 +478,6 @@ export default function App() {
     setIsCheckoutOpen(true); setCheckoutStep(1); setCheckoutErro('');
   };
 
-  // ==========================================
-  // FUNÇÃO FINALIZAR COMPRA E REDIRECIONAR STRIPE
-  // ==========================================
   const handleFinalizarCompra = async () => {
     setCheckoutLoading(true);
     setCheckoutErro('');
@@ -452,7 +501,7 @@ export default function App() {
       if (data.pagamento_url) {
         window.location.href = data.pagamento_url;
       } else {
-        throw new Error("Erro de Integração: Link da Stripe não gerado. Verifique o STRIPE_SECRET_KEY no .env do backend.");
+        throw new Error("Erro de Integração: Link não gerado. Verifique a chave da Gateway no .env do backend.");
       }
       
     } catch (error) { 
@@ -559,6 +608,7 @@ export default function App() {
     });
     setIsCartOpen(true);
   };
+  
   const updateQuantity = (id, tamanho, delta) => setCart(prevCart => prevCart.map(item => item.id === id && item.tamanho === tamanho ? { ...item, quantidade: Math.max(1, item.quantidade + delta) } : item));
   const removeFromCart = (id, tamanho) => setCart(prevCart => prevCart.filter(item => !(item.id === id && item.tamanho === tamanho)));
   const cartTotal = useMemo(() => cart.reduce((total, item) => total + (item.preco * item.quantidade), 0), [cart]);
@@ -1113,50 +1163,84 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DO CARRINHO */}
+      {/* MODAL DO CARRINHO (AGORA COM VITRINE DE RECOMENDAÇÕES ROBUSTA) */}
       {isCartOpen && (
         <div className="fixed inset-0 z-40 overflow-hidden">
           <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsCartOpen(false)} />
           <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-xl flex flex-col z-50">
             <div className="flex items-center justify-between px-4 py-6 border-b border-gray-200">
-              <h2 className="text-lg font-medium text-gray-900">Carrinho</h2>
+              <h2 className="text-lg font-medium text-gray-900 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-green-600"/> O seu Carrinho</h2>
               <button onClick={() => setIsCartOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-            <div className="flex-1 overflow-y-auto px-4 py-6">
-              {cart.length === 0 ? <p className="text-center text-gray-500 py-10">Carrinho vazio.</p> : (
-                <ul className="divide-y divide-gray-200">
-                  {cart.map((item) => {
-                    const imgUrl = (item.imagens && item.imagens.length > 0) ? item.imagens[0] : (item.imagem || 'https://placehold.co/100?text=Sem+Foto');
-                    const precoNumerico = Number(String(item.preco).replace(',', '.')) || 0;
+            
+            <div className="flex-1 overflow-y-auto">
+              <div className="px-4 py-4">
+                {cart.length === 0 ? <p className="text-center text-gray-500 py-10">Carrinho vazio.</p> : (
+                  <ul className="divide-y divide-gray-100">
+                    {cart.map((item) => {
+                      const imgUrl = (item.imagens && item.imagens.length > 0) ? item.imagens[0] : (item.imagem || 'https://placehold.co/100?text=Sem+Foto');
+                      const precoNumerico = Number(String(item.preco).replace(',', '.')) || 0;
 
-                    return (
-                      <li key={`${item.id}-${item.tamanho}`} className="py-6 flex">
-                        <img src={imgUrl} className="w-16 h-16 rounded object-cover" />
-                        <div className="ml-4 flex-1">
-                          <div className="flex justify-between">
-                            <h3 className="text-sm font-medium text-gray-900">{item.nome_camisa}</h3>
-                            <button onClick={() => removeFromCart(item.id, item.tamanho)} className="text-gray-400 hover:text-red-500 ml-2"><Trash2 className="w-4 h-4" /></button>
-                          </div>
-                          <p className="text-xs text-gray-500 mt-1">Tam: {item.tamanho}</p>
-                          <div className="flex justify-between items-center mt-2">
-                            <div className="flex items-center gap-2 border rounded">
-                              <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, -1)}><Minus className="w-3 h-3"/></button>
-                              <span className="text-sm px-2 font-medium">{item.quantidade}</span>
-                              <button className="p-1 text-gray-600" onClick={()=>updateQuantity(item.id, item.tamanho, 1)}><Plus className="w-3 h-3"/></button>
+                      return (
+                        <li key={`${item.id}-${item.tamanho}`} className="py-4 flex">
+                          <img src={imgUrl} className="w-16 h-16 rounded object-cover border border-gray-100" />
+                          <div className="ml-4 flex-1">
+                            <div className="flex justify-between">
+                              <h3 className="text-sm font-medium text-gray-900 leading-tight pr-4">{item.nome_camisa}</h3>
+                              <button onClick={() => removeFromCart(item.id, item.tamanho)} className="text-gray-400 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
                             </div>
-                            <p className="font-bold">R$ {(precoNumerico * item.quantidade).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500 mt-1">Tam: <span className="font-bold text-gray-800">{item.tamanho}</span></p>
+                            <div className="flex justify-between items-center mt-3">
+                              <div className="flex items-center gap-2 border border-gray-300 rounded">
+                                <button className="p-1 text-gray-600 hover:bg-gray-100" onClick={()=>updateQuantity(item.id, item.tamanho, -1)}><Minus className="w-3 h-3"/></button>
+                                <span className="text-sm px-2 font-medium">{item.quantidade}</span>
+                                <button className="p-1 text-gray-600 hover:bg-gray-100" onClick={()=>updateQuantity(item.id, item.tamanho, 1)}><Plus className="w-3 h-3"/></button>
+                              </div>
+                              <p className="font-extrabold text-slate-900">R$ {(precoNumerico * item.quantidade).toFixed(2)}</p>
+                            </div>
                           </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              {/* VITRINE DE RECOMENDAÇÕES NO CARRINHO */}
+              {recomendacoesCarrinho.length > 0 && cart.length > 0 && (
+                <div className="mt-4 border-t border-gray-200 bg-blue-50 p-4">
+                  <h3 className="text-xs font-black text-blue-900 uppercase tracking-wider flex items-center gap-1.5 mb-3">
+                    <Sparkles className="w-4 h-4 text-blue-600" /> Quem comprou, também levou:
+                  </h3>
+                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
+                    {recomendacoesCarrinho.map(rec => {
+                      const imgUrl = (rec.imagens && rec.imagens.length > 0) ? rec.imagens[0] : (rec.imagem || 'https://placehold.co/100?text=Sem+Foto');
+                      return (
+                        <div key={rec.id} className="min-w-[130px] w-[130px] bg-white border border-blue-100 rounded-lg p-2 flex flex-col snap-start shadow-sm">
+                          <img src={imgUrl} className="w-full h-[80px] object-cover rounded mb-2 bg-gray-50" />
+                          <h4 className="text-[11px] font-semibold text-gray-800 line-clamp-2 leading-snug mb-1" title={rec.nome_camisa}>{rec.nome_camisa}</h4>
+                          <p className="text-xs font-extrabold text-blue-700 mt-auto">R$ {Number(rec.preco).toFixed(2)}</p>
+                          <button 
+                            onClick={() => addToCart(rec, rec.tamanhos?.[0] || 'M')} 
+                            className="mt-2 w-full py-1.5 bg-blue-600 text-white text-[10px] font-bold uppercase rounded hover:bg-blue-700 transition-colors"
+                          >
+                            + Adicionar
+                          </button>
                         </div>
-                      </li>
-                    )
-                  })}
-                </ul>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
             </div>
+
             {cart.length > 0 && (
-              <div className="p-6 border-t bg-gray-50">
-                <div className="flex justify-between font-bold text-lg mb-4"><span>Total</span><span>R$ {cartTotal.toFixed(2)}</span></div>
-                <button onClick={handleIniciarCheckout} className="w-full bg-green-600 text-white py-3 rounded-md font-bold hover:bg-green-700 shadow-md transition-colors">
+              <div className="p-6 border-t border-gray-200 bg-white">
+                <div className="flex justify-between items-end mb-4">
+                  <span className="text-gray-500 text-sm font-medium">Total Estimado</span>
+                  <span className="font-black text-2xl text-slate-900">R$ {cartTotal.toFixed(2)}</span>
+                </div>
+                <button onClick={handleIniciarCheckout} className="w-full bg-green-600 text-white py-3.5 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors text-lg">
                   Finalizar Compra
                 </button>
               </div>

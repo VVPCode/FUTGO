@@ -3,7 +3,7 @@ import os
 import time
 import random
 import uuid
-import stripe  # <-- NOVA IMPORTAÇÃO: Stripe no lugar de mercadopago
+import stripe
 from datetime import datetime
 from django.conf import settings
 from django.core.mail import send_mail
@@ -15,11 +15,9 @@ from rest_framework import status
 from firebase_admin import auth as firebase_auth
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-# IMPORTAÇÃO DO TWILIO E DOTENV
 from twilio.rest import Client
 from dotenv import load_dotenv
 
-# FORÇA A LEITURA DO FICHEIRO .env AQUI NO VIEWS!
 load_dotenv()
 
 from .firebase_config import db
@@ -128,15 +126,11 @@ class SendOTPView(APIView):
             otp_code = str(random.randint(100000, 999999))
             db.collection('otps').document(identificador).set({'otp': otp_code, 'timestamp': time.time()})
            
-            # ==============================================================
-            # NOVO: IMPRIMIR O CÓDIGO NO TERMINAL PARA TODOS OS CASOS
-            # ==============================================================
             print("\n" + "="*50)
             print(f"🔑 [FUTGO] NOVO CÓDIGO OTP: {otp_code}")
             print(f"🎯 Destino: {identificador}")
             print(f"📡 Método:  {metodo.upper()}")
             print("="*50 + "\n")
-            # ==============================================================
 
             if metodo == 'email':
                 try:
@@ -322,7 +316,6 @@ class ProdutoDetailView(APIView):
 # ==========================================
 # GESTÃO DE PEDIDOS E PAGAMENTO (STRIPE)
 # ==========================================
-
 class PedidoCreateView(APIView):
     def post(self, request):
         try:
@@ -333,7 +326,6 @@ class PedidoCreateView(APIView):
             dados = request.data
             id_pedido = f"PED-{int(time.time())}"
            
-            # 1. Preparar os dados do Pedido
             novo_pedido = {
                 "id_pedido": id_pedido,
                 "id_usuario": int(user_id),
@@ -345,62 +337,43 @@ class PedidoCreateView(APIView):
                 "data_pedido": datetime.utcnow().isoformat() + "Z"
             }
            
-            # 2. Salvar no Firestore
             db.collection('pedidos').document(id_pedido).set(novo_pedido)
            
-            # 3. Buscar e-mail do usuário
             user_email = ""
             user_doc = db.collection('usuarios').document(str(user_id)).get()
             if user_doc.exists:
                 user_email = user_doc.to_dict().get('email', '')
 
-            # ==========================================
-            # 4. INTEGRAÇÃO STRIPE (GERAR LINK DE CHECKOUT)
-            # ==========================================
-           
-            # IMPRIME NO TERMINAL PARA DEBUG
             stripe_secret_key = os.environ.get('STRIPE_SECRET_KEY', '')
-            print("\n" + "="*50)
-            print("💳 TENTANDO CRIAR PAGAMENTO NA STRIPE")
-            print(f"Token do .env encontrado? {'SIM' if stripe_secret_key else 'NÃO (Está vazio!)'}")
-           
             pagamento_url = None
            
             if stripe_secret_key:
                 try:
                     stripe.api_key = stripe_secret_key
-                   
                     line_items = []
                    
-                    # A Stripe trabalha com cêntimos. Ex: R$ 50.00 = 5000 cêntimos
                     for item in novo_pedido['itens']:
                         line_items.append({
                             'price_data': {
                                 'currency': 'brl',
-                                'product_data': {
-                                    'name': f"{item['nome_camisa']} ({item['tamanho']})",
-                                },
+                                'product_data': {'name': f"{item['nome_camisa']} ({item['tamanho']})"},
                                 'unit_amount': int(float(item['preco']) * 100),
                             },
                             'quantity': int(item['quantidade']),
                         })
                    
-                    # Adicionar Frete
                     if float(novo_pedido['frete'].get('valor', 0)) > 0:
                         line_items.append({
                             'price_data': {
                                 'currency': 'brl',
-                                'product_data': {
-                                    'name': f"Frete - {novo_pedido['frete'].get('tipo', 'Envio')}",
-                                },
+                                'product_data': {'name': f"Frete - {novo_pedido['frete'].get('tipo', 'Envio')}"},
                                 'unit_amount': int(float(novo_pedido['frete']['valor']) * 100),
                             },
                             'quantity': 1,
                         })
 
-                    # Criar Sessão de Checkout
                     checkout_session = stripe.checkout.Session.create(
-                        payment_method_types=['card','boleto'],
+                        payment_method_types=['card', 'boleto'],
                         line_items=line_items,
                         mode='payment',
                         customer_email=user_email if '@' in user_email else None,
@@ -410,13 +383,8 @@ class PedidoCreateView(APIView):
                     )
                    
                     pagamento_url = checkout_session.url
-                    print(f"✅ Link gerado com sucesso: {pagamento_url}")
-                       
                 except Exception as e:
-                    print(f"🚨 ERRO FATAL NA INTEGRAÇÃO STRIPE: {str(e)}")
-            else:
-                print("⚠️ ERRO: O código não tentou ligar à Stripe porque a chave STRIPE_SECRET_KEY está em branco.")
-            print("="*50 + "\n")
+                    print(f"🚨 ERRO NA STRIPE: {str(e)}")
 
             return Response({
                 "mensagem": "Pedido gerado!",
@@ -460,3 +428,71 @@ class PedidoStatusUpdateView(APIView):
            
             return Response({"mensagem": "Status atualizado!", "status": novo_status}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
+
+# ==========================================
+# SISTEMA DE RECOMENDAÇÕES (SEMPRE 3+)
+# ==========================================
+class RecomendacoesView(APIView):
+    def get(self, request):
+        try:
+            produto_id = request.GET.get('produto_id')
+            if not produto_id:
+                return Response([], status=200)
+
+            recomendados = []
+            top_ids = []
+
+            # 1. Procurar no histórico de pedidos
+            pedidos_docs = db.collection('pedidos').get()
+            produtos_relacionados_count = {}
+
+            for p_doc in pedidos_docs:
+                pedido = p_doc.to_dict()
+                itens = pedido.get('itens', [])
+                ids_no_pedido = [str(item.get('id', item.get('id_produto', ''))) for item in itens]
+               
+                if str(produto_id) in ids_no_pedido:
+                    for item_id in ids_no_pedido:
+                        if item_id != str(produto_id) and item_id:
+                            produtos_relacionados_count[item_id] = produtos_relacionados_count.get(item_id, 0) + 1
+
+            ids_mais_comprados = sorted(produtos_relacionados_count, key=produtos_relacionados_count.get, reverse=True)
+           
+            for t_id in ids_mais_comprados:
+                prod_doc = db.collection('produtos').document(t_id).get()
+                if prod_doc.exists:
+                    recomendados.append(prod_doc.to_dict())
+                    top_ids.append(t_id)
+                if len(recomendados) >= 4:
+                    break
+
+            # 2. Se tiver menos de 4, preenche com produtos da MESMA CATEGORIA
+            if len(recomendados) < 4:
+                base_prod = db.collection('produtos').document(str(produto_id)).get()
+                if base_prod.exists:
+                    categoria = base_prod.to_dict().get('categoria')
+                    fallback_cat = db.collection('produtos').where(filter=FieldFilter('categoria', '==', categoria)).limit(10).get()
+                   
+                    for fb in fallback_cat:
+                        fb_dict = fb.to_dict()
+                        if fb_dict.get('id') != str(produto_id) and fb_dict.get('id') not in top_ids:
+                            recomendados.append(fb_dict)
+                            top_ids.append(fb_dict.get('id'))
+                            if len(recomendados) >= 4:
+                                break
+
+            # 3. Se AINDA tiver menos de 3, preenche com QUALQUER PRODUTO da loja
+            if len(recomendados) < 3:
+                all_prods = db.collection('produtos').limit(15).get()
+                for ap in all_prods:
+                    ap_dict = ap.to_dict()
+                    if ap_dict.get('id') != str(produto_id) and ap_dict.get('id') not in top_ids:
+                        recomendados.append(ap_dict)
+                        top_ids.append(ap_dict.get('id'))
+                        if len(recomendados) >= 4:
+                            break
+
+            return Response(recomendados[:4], status=200)
+           
+        except Exception as e:
+            return Response({"erro": str(e)}, status=500)

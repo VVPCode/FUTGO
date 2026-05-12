@@ -9,9 +9,11 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-default')
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-# Ajuste seguro para ALLOWED_HOSTS
-hosts = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1')
-ALLOWED_HOSTS = [h.strip() for h in hosts.split(',')]
+# ==============================================================
+# A SOLUÇÃO DEFINITIVA: Ignorar o .env e forçar a aceitar tudo
+# O asterisco '*' permite que o emulador (10.0.2.2) aceda à API
+# ==============================================================
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -38,7 +40,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'futgo_core.urls'
 
-# CONFIGURAÇÃO DE TEMPLATES (CORRIGIDA PARA O ADMIN)
+# CONFIGURAÇÃO DE TEMPLATES
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -92,6 +94,6 @@ TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
 TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
 TWILIO_WHATSAPP_CONTENT_SID = os.environ.get('TWILIO_WHATSAPP_CONTENT_SID')
 
-# Configuração para guardar os ficheiros de imagem na pasta "media"
+# MEDIA
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

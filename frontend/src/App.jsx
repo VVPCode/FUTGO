@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -87,6 +87,11 @@ export default function App() {
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
   const [editCpf, setEditCpf] = useState('');
+ 
+  // NOVOS ESTADOS PARA PREFERÊNCIAS DE NOTIFICAÇÃO
+  const [notificaEmail, setNotificaEmail] = useState(true);
+  const [notificaWhatsapp, setNotificaWhatsapp] = useState(true);
+ 
   const [profileErro, setProfileErro] = useState('');
   const [profileSucesso, setProfileSucesso] = useState('');
   const [isProfileLoading, setIsProfileLoading] = useState(false);
@@ -104,14 +109,14 @@ export default function App() {
   const [isBuscandoCep, setIsBuscandoCep] = useState(false);
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState('lista'); 
+  const [adminTab, setAdminTab] = useState('lista');
   const [adminProdutoEditing, setAdminProdutoEditing] = useState(null);
   const [prodNome, setProdNome] = useState('');
   const [prodPreco, setProdPreco] = useState('');
   const [prodCategoria, setProdCategoria] = useState('Nacional');
-  const [prodImagem, setProdImagem] = useState(''); 
-  const [prodImagensSalvas, setProdImagensSalvas] = useState([]); 
-  const [prodNovosArquivos, setProdNovosArquivos] = useState([]); 
+  const [prodImagem, setProdImagem] = useState('');
+  const [prodImagensSalvas, setProdImagensSalvas] = useState([]);
+  const [prodNovosArquivos, setProdNovosArquivos] = useState([]);
   const [prodCores, setProdCores] = useState([]);
   const [prodPais, setProdPais] = useState('');
   const [prodLiga, setProdLiga] = useState('');
@@ -125,40 +130,29 @@ export default function App() {
   const [isAdminLoading, setIsAdminLoading] = useState(false);
   const [todosPedidos, setTodosPedidos] = useState([]);
 
-  // ==========================================
-  // ESTADOS DE CHECKOUT E RECOMENDAÇÕES
-  // ==========================================
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [checkoutStep, setCheckoutStep] = useState(1); 
+  const [checkoutStep, setCheckoutStep] = useState(1);
   const [checkoutData, setCheckoutData] = useState({ endereco: null, frete: null });
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutErro, setCheckoutErro] = useState('');
-  
-  const [pedidosUsuario, setPedidosUsuario] = useState([]); 
-  const [notificacaoInApp, setNotificacaoInApp] = useState(null); 
-  
-  // NOVO ESTADO: Sugestões de Upsell no Carrinho
+ 
+  const [pedidosUsuario, setPedidosUsuario] = useState([]);
+  const [notificacaoInApp, setNotificacaoInApp] = useState(null);
+ 
   const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
-  // ==========================================
-  // EFEITO: BUSCAR RECOMENDAÇÕES (GARANTINDO 3+)
-  // ==========================================
   useEffect(() => {
     const fetchRecomendacoes = async () => {
       if (cart.length > 0 && isCartOpen) {
-        const baseItem = cart[cart.length - 1]; // Usa o último adicionado
-        
+        const baseItem = cart[cart.length - 1];
+       
         try {
           const res = await fetch(`${API_BASE_URL}/recomendacoes/?produto_id=${baseItem.id}`);
           if (res.ok) {
             const data = await res.json();
-            
-            // Remove produtos que já estão no carrinho para não sugerir em duplicado
             const sugestoesLimpidas = (data || []).filter(rec => !cart.some(itemCart => itemCart.id === rec.id));
-            
-            // Se a API retornou menos de 3 sugestões após a limpeza, usamos o nosso super preenchedor
             if (sugestoesLimpidas.length >= 3) {
               setRecomendacoesCarrinho(sugestoesLimpidas.slice(0, 4));
             } else {
@@ -178,24 +172,11 @@ export default function App() {
     fetchRecomendacoes();
   }, [cart, isCartOpen, produtos]);
 
-  // Esta função garante que a vitrine tem sempre sugestões suficientes, misturando API com dados locais
   const preencherRecomendacoes = (baseItem, sugestoesIniciais) => {
     const idsJaSugeridos = sugestoesIniciais.map(s => s.id);
-    
-    // Todos os produtos que não são o próprio e que não estão no carrinho nem na lista inicial
-    let disponiveis = produtos.filter(p => 
-      p.id !== baseItem.id && 
-      !cart.some(itemCart => itemCart.id === p.id) &&
-      !idsJaSugeridos.includes(p.id)
-    );
-
-    // Primeiro tentamos preencher com produtos da mesma categoria
+    let disponiveis = produtos.filter(p => p.id !== baseItem.id && !cart.some(itemCart => itemCart.id === p.id) && !idsJaSugeridos.includes(p.id));
     let mesmaCategoria = disponiveis.filter(p => p.categoria === baseItem.categoria);
-    
-    // Depois, se ainda faltar espaço, atiramos qualquer outro produto para a mistura
     let outrasCategorias = disponiveis.filter(p => p.categoria !== baseItem.categoria);
-
-    // Junta tudo e corta nos 4 (garante pelo menos 3, desde que haja inventário)
     let recsFinais = [...sugestoesIniciais, ...mesmaCategoria, ...outrasCategorias];
     setRecomendacoesCarrinho(recsFinais.slice(0, 4));
   };
@@ -203,7 +184,7 @@ export default function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const statusPagamento = urlParams.get('pagamento');
-    
+   
     if (statusPagamento === 'sucesso') {
       mostrarNotificacao('Pagamento Aprovado! 🎉', 'O seu pagamento foi processado com sucesso. O pedido será enviado em breve!');
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -229,17 +210,17 @@ export default function App() {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const pedidosAtualizados = [];
-      
+     
       snapshot.docChanges().forEach((change) => {
         const pedido = change.doc.data();
-        
+       
         if (change.type === 'added') {
           previousStatuses.set(pedido.id_pedido, pedido.status);
           if (!isInitialLoad) {
             mostrarNotificacao('Pedido Registado! ⚽', `Pedido ${pedido.id_pedido} criado.`);
           }
         }
-        
+       
         if (change.type === 'modified') {
           const oldStatus = previousStatuses.get(pedido.id_pedido);
           if (oldStatus !== pedido.status) {
@@ -252,7 +233,7 @@ export default function App() {
       snapshot.forEach(doc => pedidosAtualizados.push(doc.data()));
       pedidosAtualizados.sort((a, b) => new Date(b.data_pedido) - new Date(a.data_pedido));
       setPedidosUsuario(pedidosAtualizados);
-      
+     
       isInitialLoad = false;
     });
 
@@ -314,7 +295,7 @@ export default function App() {
       const fallbackEmail = result.user.email || result.user.providerData[0]?.email || "";
       if (!fallbackEmail) throw new Error("O seu provedor não partilhou o e-mail.");
       const fallbackName = result.user.displayName || result.user.providerData[0]?.displayName || "Utilizador";
-      
+     
       const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha na sincronização.');
@@ -332,8 +313,8 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/check/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identificador: identificadorFormatado }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor Django.');
-      
-      if (data.existe) { setAuthMode('login'); await triggerSendOTP(identificadorFormatado, data.metodo); } 
+     
+      if (data.existe) { setAuthMode('login'); await triggerSendOTP(identificadorFormatado, data.metodo); }
       else {
         setAuthMode('register'); setAuthStep('register');
         if (!authEmail.includes('@')) setAuthTelefone(authEmail.replace(/\D/g, ''));
@@ -372,11 +353,11 @@ export default function App() {
       let payload = authMode === 'login'
         ? { identificador: identificadorFormatado, otp: authOtp }
         : { nome: tempUserData.nome, email: authEmail.includes('@') ? authEmail : '', cpf: tempUserData.cpf, telefone: tempUserData.telefone, identificador: identificadorFormatado, otp: authOtp };
-      
+     
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Código inválido.');
-      
+     
       setAppUser(data.usuario); closeAuthModal();
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
@@ -386,11 +367,23 @@ export default function App() {
   const openProfileModal = async () => {
     setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
     setEditNome(appUser.nome); setEditTelefone(appUser.telefone); setEditCpf(appUser.cpf || '');
+   
+    // Inicia os toggles, se não existir o campo, assume true (para novos e antigos utilizadores)
+    setNotificaEmail(appUser.notifica_email !== false);
+    setNotificaWhatsapp(appUser.notifica_whatsapp !== false);
+
     setIsFetchingData(true);
     try {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`);
       const data = await res.json();
-      if (res.ok) { setAppUser(data.usuario); setEditNome(data.usuario.nome); setEditTelefone(data.usuario.telefone); setEditCpf(data.usuario.cpf || ''); }
+      if (res.ok) {
+        setAppUser(data.usuario);
+        setEditNome(data.usuario.nome);
+        setEditTelefone(data.usuario.telefone);
+        setEditCpf(data.usuario.cpf || '');
+        setNotificaEmail(data.usuario.notifica_email !== false);
+        setNotificaWhatsapp(data.usuario.notifica_whatsapp !== false);
+      }
       await fetchEnderecos();
     } catch (error) {} finally { setIsFetchingData(false); }
   };
@@ -399,12 +392,18 @@ export default function App() {
     e.preventDefault();
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
     try {
-      const payload = { nome: editNome, telefone: editTelefone };
+      const payload = {
+        nome: editNome,
+        telefone: editTelefone,
+        notifica_email: notificaEmail,
+        notifica_whatsapp: notificaWhatsapp
+      };
       if (!appUser.cpf && editCpf) payload.cpf = editCpf;
+     
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao atualizar.');
-      setAppUser(data.usuario); setProfileSucesso('Perfil atualizado com sucesso!');
+      setAppUser(data.usuario); setProfileSucesso('Perfil e preferências guardadas!');
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
@@ -484,48 +483,48 @@ export default function App() {
     try {
       const payload = {
         itens: cart.map(i => ({ id: i.id, nome_camisa: i.nome_camisa, tamanho: i.tamanho, quantidade: i.quantidade, preco: i.preco })),
-        endereco_id: checkoutData.endereco.id_endereco, 
-        frete: checkoutData.frete, 
+        endereco_id: checkoutData.endereco.id_endereco,
+        frete: checkoutData.frete,
         total: cartTotal + checkoutData.frete.valor
       };
-      
-      const res = await fetch(`${API_BASE_URL}/pedidos/`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario }, 
-        body: JSON.stringify(payload) 
+     
+      const res = await fetch(`${API_BASE_URL}/pedidos/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario },
+        body: JSON.stringify(payload)
       });
-      
+     
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Falha ao processar o pedido.');
-      
+     
       if (data.pagamento_url) {
         window.location.href = data.pagamento_url;
       } else {
         throw new Error("Erro de Integração: Link não gerado. Verifique a chave da Gateway no .env do backend.");
       }
-      
-    } catch (error) { 
-      setCheckoutErro(error.message); 
+     
+    } catch (error) {
+      setCheckoutErro(error.message);
       setCheckoutLoading(false);
-    } 
+    }
   };
 
-  const fetchTodosPedidos = async () => { 
-    try { 
-      const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} }); 
+  const fetchTodosPedidos = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/pedidos/admin/`, { headers: {'X-User-ID': appUser.id_usuario} });
       if (res.ok) {
         const data = await res.json();
-        setTodosPedidos(data); 
+        setTodosPedidos(data);
       }
-    } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); } 
+    } catch(e) { console.error("Erro ao puxar todos os pedidos:", e); }
   };
 
-  const updatePedidoStatus = async (id_pedido, status) => { 
-    try { 
-      const res = await fetch(`${API_BASE_URL}/pedidos/${id_pedido}/status/`, { method: 'PUT', headers: {'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario}, body: JSON.stringify({ status }) }); 
-      if (res.ok) { fetchTodosPedidos(); } 
+  const updatePedidoStatus = async (id_pedido, status) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/pedidos/${id_pedido}/status/`, { method: 'PUT', headers: {'Content-Type': 'application/json', 'X-User-ID': appUser.id_usuario}, body: JSON.stringify({ status }) });
+      if (res.ok) { fetchTodosPedidos(); }
       else { const data = await res.json(); setAdminErro(data.erro || "Falha ao atualizar o status"); }
-    } catch(e) { console.error(e); } 
+    } catch(e) { console.error(e); }
   };
 
   const openAdminModal = () => { setAdminTab('lista'); setIsAdminModalOpen(true); setAdminErro(''); setIsAdminLoading(false); fetchTodosPedidos(); };
@@ -552,7 +551,7 @@ export default function App() {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     const novosItens = files.map(file => ({ file, preview: URL.createObjectURL(file) }));
-    setProdNovosArquivos(prev => [...prev, ...novosItens]); e.target.value = null; 
+    setProdNovosArquivos(prev => [...prev, ...novosItens]); e.target.value = null;
   };
 
   const removerNovaImagem = (index) => { setProdNovosArquivos(prev => { const updated = [...prev]; URL.revokeObjectURL(updated[index].preview); updated.splice(index, 1); return updated; }); };
@@ -600,7 +599,7 @@ export default function App() {
   };
 
   const addToCart = (produto, tamanho) => {
-    const prodId = produto.id || produto.id_produto || produto._id; 
+    const prodId = produto.id || produto.id_produto || produto._id;
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === prodId && item.tamanho === tamanho);
       if (existingItem) return prevCart.map(item => (item.id === prodId && item.tamanho === tamanho) ? { ...item, quantidade: item.quantidade + 1 } : item);
@@ -608,7 +607,7 @@ export default function App() {
     });
     setIsCartOpen(true);
   };
-  
+ 
   const updateQuantity = (id, tamanho, delta) => setCart(prevCart => prevCart.map(item => item.id === id && item.tamanho === tamanho ? { ...item, quantidade: Math.max(1, item.quantidade + delta) } : item));
   const removeFromCart = (id, tamanho) => setCart(prevCart => prevCart.filter(item => !(item.id === id && item.tamanho === tamanho)));
   const cartTotal = useMemo(() => cart.reduce((total, item) => total + (item.preco * item.quantidade), 0), [cart]);
@@ -649,7 +648,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-gray-50 font-sans text-gray-800 flex flex-col relative">
-      
+     
       {/* TOAST NOTIFICATION UI */}
       {notificacaoInApp && (
         <div className="fixed top-20 right-4 z-[100] bg-white border-l-4 border-green-500 shadow-2xl rounded-lg p-4 w-80 flex items-start gap-3 transition-all duration-300">
@@ -678,7 +677,7 @@ export default function App() {
                 <span className="font-bold text-xl tracking-tight hidden sm:block">FUTGO!</span>
               </div>
             </div>
-            
+           
             <div className="hidden md:block flex-1 max-w-2xl mx-8">
               <div className="relative">
                 <Search className="absolute inset-y-0 left-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
@@ -729,7 +728,7 @@ export default function App() {
             ))}
           </div>
         </div>
-        
+       
         {isLoadingProdutos ? (
           <div className="flex flex-col justify-center items-center py-20 text-gray-500 gap-3">
              <Loader2 className="w-8 h-8 animate-spin text-green-600" />
@@ -751,10 +750,10 @@ export default function App() {
               <h3 className="font-bold text-xl text-slate-900">Acesso</h3>
               <button onClick={closeAuthModal} className="text-gray-400 hover:text-gray-600"><X/></button>
             </div>
-            
+           
             {authErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authErro}</div>}
             {authMensagem && <div className="mb-4 p-3 bg-blue-50 text-blue-700 text-sm rounded-lg font-medium flex items-start gap-2 border border-blue-100"><Mail className="w-5 h-5 flex-shrink-0" /> <p>{authMensagem}</p></div>}
-            
+           
             {authStep === 'email' && (
               <form onSubmit={handleCheckAuth} className="space-y-4">
                 <input type="text" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="E-mail ou WhatsApp (Ex: 11999999999)" />
@@ -811,7 +810,7 @@ export default function App() {
               <h3 className="font-bold text-xl text-slate-900 flex items-center gap-2">A Minha Conta</h3>
               <button onClick={() => setIsProfileModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-            
+           
             <div className="flex border-b border-gray-200 bg-white">
               <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
               <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
@@ -821,7 +820,7 @@ export default function App() {
             <div className="p-6 overflow-y-auto">
               {profileErro && <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">{profileErro}</div>}
               {profileSucesso && <div className="mb-4 p-3 bg-green-50 text-green-700 text-sm rounded-lg">{profileSucesso}</div>}
-              
+             
               {profileTab === 'dados' && (
                 !isConfirmingDelete ? (
                   <form onSubmit={handleUpdateProfile} className="space-y-4">
@@ -833,11 +832,47 @@ export default function App() {
                       <div><label className="block text-sm font-medium mb-1 text-gray-500">CPF</label><input type="text" value={appUser.cpf || editCpf} disabled={!!appUser.cpf} onChange={(e) => setEditCpf(e.target.value)} className="w-full px-4 py-2 border rounded-lg disabled:bg-gray-100" /></div>
                       <div><label className="block text-sm font-medium mb-1 text-gray-500">E-mail</label><input type="email" value={appUser.email} disabled className="w-full px-4 py-2 border rounded-lg disabled:bg-gray-100" /></div>
                     </div>
+
+                    {/* ======================================================== */}
+                    {/* NOVA SECÇÃO: PREFERÊNCIAS DE NOTIFICAÇÃO                 */}
+                    {/* ======================================================== */}
+                    <div className="pt-4 border-t border-gray-100 mt-4 space-y-3">
+                      <h4 className="text-sm font-bold text-gray-800">Preferências de Notificação (Status do Pedido)</h4>
+                     
+                      <label className="flex items-center justify-between cursor-pointer p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-green-300 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <Mail className={`w-5 h-5 ${notificaEmail ? 'text-green-500' : 'text-gray-400'}`} />
+                          <div>
+                            <p className="text-sm font-bold text-gray-800">E-mail</p>
+                            <p className="text-xs text-gray-500">Receber atualizações no e-mail cadastrado.</p>
+                          </div>
+                        </div>
+                        <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${notificaEmail ? 'bg-green-500' : ''}`}>
+                          <div className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-300 ease-in-out ${notificaEmail ? 'translate-x-4' : ''}`}></div>
+                        </div>
+                        <input type="checkbox" className="hidden" checked={notificaEmail} onChange={(e) => setNotificaEmail(e.target.checked)} />
+                      </label>
+
+                      <label className="flex items-center justify-between cursor-pointer p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-green-300 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <MessageCircle className={`w-5 h-5 ${notificaWhatsapp ? 'text-green-500' : 'text-gray-400'}`} />
+                          <div>
+                            <p className="text-sm font-bold text-gray-800">WhatsApp</p>
+                            <p className="text-xs text-gray-500">Receber mensagens automáticas no número acima.</p>
+                          </div>
+                        </div>
+                        <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${notificaWhatsapp ? 'bg-green-500' : ''}`}>
+                          <div className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-300 ease-in-out ${notificaWhatsapp ? 'translate-x-4' : ''}`}></div>
+                        </div>
+                        <input type="checkbox" className="hidden" checked={notificaWhatsapp} onChange={(e) => setNotificaWhatsapp(e.target.checked)} />
+                      </label>
+                    </div>
+
                     <div className="pt-6">
                       <button type="submit" disabled={isProfileLoading} className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg hover:bg-slate-800">Salvar Alterações</button>
                       <div className="flex justify-between mt-4 border-t pt-4">
-                        <button type="button" onClick={handleLogout} className="text-sm font-medium text-gray-500">Sair da conta</button>
-                        <button type="button" onClick={() => setIsConfirmingDelete(true)} className="text-sm font-medium text-red-500">Apagar Conta</button>
+                        <button type="button" onClick={handleLogout} className="text-sm font-medium text-gray-500 hover:text-gray-800">Sair da conta</button>
+                        <button type="button" onClick={() => setIsConfirmingDelete(true)} className="text-sm font-medium text-red-500 hover:text-red-700">Apagar Conta</button>
                       </div>
                     </div>
                   </form>
@@ -932,7 +967,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-70 transition-opacity" onClick={() => setIsAdminModalOpen(false)} />
           <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden z-50 flex flex-col max-h-[90vh]">
-            
+           
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-slate-900 text-white">
               <h3 className="font-bold text-xl flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-red-500" /> Painel Admin</h3>
               <div className="flex gap-4 items-center">
@@ -969,11 +1004,11 @@ export default function App() {
                               <td className="px-4 py-3 text-gray-600 font-mono text-xs">{ped.id_usuario}</td>
                               <td className="px-4 py-3 font-bold text-slate-900">R$ {ped.total.toFixed(2)}</td>
                               <td className="px-4 py-3 text-right">
-                                <select 
-                                  value={ped.status} 
+                                <select
+                                  value={ped.status}
                                   onChange={(e) => updatePedidoStatus(ped.id_pedido, e.target.value)}
                                   className={`px-3 py-1.5 rounded-lg border font-bold text-xs outline-none cursor-pointer ${
-                                    ped.status === 'Entregue' ? 'bg-green-50 text-green-700 border-green-200' : 
+                                    ped.status === 'Entregue' ? 'bg-green-50 text-green-700 border-green-200' :
                                     ped.status === 'Cancelado' ? 'bg-red-50 text-red-700 border-red-200' :
                                     'bg-blue-50 text-blue-700 border-blue-200'
                                   }`}>
@@ -1034,7 +1069,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label>
                       <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-green-500" placeholder="Ex: Camisa Brasil Titular 2024" />
                     </div>
-                    
+                   
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium mb-1">Preço (R$) *</label>
@@ -1113,7 +1148,7 @@ export default function App() {
                     <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
                       <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2"><ImageIcon className="w-5 h-5"/> Imagens do Produto *</label>
                       <p className="text-xs text-blue-700 mb-4">Carregue as imagens a partir do seu computador. A primeira imagem será a capa do produto.</p>
-                      
+                     
                       <div className="mb-4">
                         <label className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
                           <UploadCloud className="w-5 h-5" /> Adicionar Fotos
@@ -1163,7 +1198,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DO CARRINHO (AGORA COM VITRINE DE RECOMENDAÇÕES ROBUSTA) */}
+      {/* MODAL DO CARRINHO */}
       {isCartOpen && (
         <div className="fixed inset-0 z-40 overflow-hidden">
           <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsCartOpen(false)} />
@@ -1172,7 +1207,7 @@ export default function App() {
               <h2 className="text-lg font-medium text-gray-900 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-green-600"/> O seu Carrinho</h2>
               <button onClick={() => setIsCartOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-            
+           
             <div className="flex-1 overflow-y-auto">
               <div className="px-4 py-4">
                 {cart.length === 0 ? <p className="text-center text-gray-500 py-10">Carrinho vazio.</p> : (
@@ -1206,7 +1241,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* VITRINE DE RECOMENDAÇÕES NO CARRINHO */}
               {recomendacoesCarrinho.length > 0 && cart.length > 0 && (
                 <div className="mt-4 border-t border-gray-200 bg-blue-50 p-4">
                   <h3 className="text-xs font-black text-blue-900 uppercase tracking-wider flex items-center gap-1.5 mb-3">
@@ -1220,8 +1254,8 @@ export default function App() {
                           <img src={imgUrl} className="w-full h-[80px] object-cover rounded mb-2 bg-gray-50" />
                           <h4 className="text-[11px] font-semibold text-gray-800 line-clamp-2 leading-snug mb-1" title={rec.nome_camisa}>{rec.nome_camisa}</h4>
                           <p className="text-xs font-extrabold text-blue-700 mt-auto">R$ {Number(rec.preco).toFixed(2)}</p>
-                          <button 
-                            onClick={() => addToCart(rec, rec.tamanhos?.[0] || 'M')} 
+                          <button
+                            onClick={() => addToCart(rec, rec.tamanhos?.[0] || 'M')}
                             className="mt-2 w-full py-1.5 bg-blue-600 text-white text-[10px] font-bold uppercase rounded hover:bg-blue-700 transition-colors"
                           >
                             + Adicionar
@@ -1272,7 +1306,7 @@ export default function App() {
                   <h4 className="font-bold text-lg text-gray-800">Onde deseja receber o seu pedido?</h4>
                   {enderecos.length === 0 ? (
                     <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
-                      Você ainda não tem nenhum endereço salvo. 
+                      Você ainda não tem nenhum endereço salvo.
                       <button onClick={() => { setIsCheckoutOpen(false); openProfileModal(); setProfileTab('novo_endereco'); }} className="mt-2 block font-bold underline">
                         Clique aqui para adicionar um endereço no seu perfil.
                       </button>
@@ -1350,7 +1384,7 @@ export default function App() {
                   <div className="pt-4 flex justify-between border-t mt-6">
                     <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
                     <button onClick={handleFinalizarCompra} disabled={checkoutLoading} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-md disabled:opacity-50">
-                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ExternalLink className="w-5 h-5" />} 
+                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ExternalLink className="w-5 h-5" />}
                       Ir para o Pagamento
                     </button>
                   </div>
@@ -1370,9 +1404,9 @@ export default function App() {
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Filter className="w-5 h-5"/> Filtros Refinados</h2>
               <button onClick={() => setIsFilterSidebarOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
-            
+           
             <div className="p-4 space-y-6">
-              
+             
               <div className="bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between cursor-pointer" onClick={() => setFiltrosAvancados({...filtrosAvancados, personalizavel: !filtrosAvancados.personalizavel})}>
                 <span className="text-sm font-bold text-green-900">Aceita Personalização</span>
                 <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'bg-green-500' : ''}`}>
@@ -1506,7 +1540,7 @@ export default function App() {
 function ProductCard({ produto, onAdd }) {
   const [tamanho, setTamanho] = useState('M');
   const [imgIndex, setImgIndex] = useState(0);
-  
+ 
   const tamanhosDisponiveis = produto.tamanhos && produto.tamanhos.length > 0 ? produto.tamanhos : ['P', 'M', 'G', 'GG'];
   const listaImagens = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
 
@@ -1533,19 +1567,19 @@ function ProductCard({ produto, onAdd }) {
           Personalizável
         </span>
       )}
-      
+     
       <div className="relative w-full h-72 bg-gray-50 flex items-center justify-center">
         {listaImagens.length > 0 ? (
           <img src={listaImagens[imgIndex]} className="w-full h-full object-cover transition-opacity duration-300" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
         ) : (
           <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
         )}
-        
+       
         {listaImagens.length > 1 && (
           <>
             <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
             <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
-            
+           
             <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
               {listaImagens.map((_, idx) => (
                 <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === imgIndex ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />

@@ -1,3 +1,5 @@
+views.py
+
 import re
 import os
 import time
@@ -89,7 +91,16 @@ class SocialLoginView(APIView):
                 return Response({"mensagem": "Login com sucesso!", "usuario": query[0].to_dict()}, status=status.HTTP_200_OK)
             else:
                 id_usuario = int(time.time())
-                novo_usuario = {"id_usuario": id_usuario, "nome": nome, "email": email, "cpf": "", "telefone": "", "data_cadastro": datetime.utcnow().isoformat() + "Z"}
+                novo_usuario = {
+                    "id_usuario": id_usuario,
+                    "nome": nome,
+                    "email": email,
+                    "cpf": "",
+                    "telefone": "",
+                    "data_cadastro": datetime.utcnow().isoformat() + "Z",
+                    "notifica_email": True,
+                    "notifica_whatsapp": True
+                }
                 db.collection('usuarios').document(str(id_usuario)).set(novo_usuario)
                 return Response({"mensagem": "Conta criada!", "usuario": novo_usuario}, status=status.HTTP_201_CREATED)
         except Exception as e:
@@ -153,12 +164,12 @@ class SendOTPView(APIView):
                         is_sandbox = '14155238886' in str(twilio_number)
 
                         if is_sandbox:
-                            message = client.messages.create(body=f"Your FUTGO code is {otp_code}", from_=from_number, to=to_number)
+                            client.messages.create(body=f"Your FUTGO code is {otp_code}", from_=from_number, to=to_number)
                         elif content_sid:
                             import json
-                            message = client.messages.create(from_=from_number, to=to_number, content_sid=content_sid, content_variables=json.dumps({"1": str(otp_code)}))
+                            client.messages.create(from_=from_number, to=to_number, content_sid=content_sid, content_variables=json.dumps({"1": str(otp_code)}))
                         else:
-                            message = client.messages.create(body=f"⚽ *FUTGO!*\nO seu código de acesso seguro é: *{otp_code}*", from_=from_number, to=to_number)
+                            client.messages.create(body=f"⚽ *FUTGO!*\nO seu código de acesso seguro é: *{otp_code}*", from_=from_number, to=to_number)
                 except Exception as e: print(f"Erro na Twilio: {str(e)}")
                 return Response({"mensagem": "OTP gerado!", "otp": otp_code}, status=200)
             return Response({"erro": "Método desconhecido."}, status=400)
@@ -204,7 +215,16 @@ class RegisterView(APIView):
             if len(check_email) > 0: return Response({"erro": "E-mail já registado."}, status=409)
 
             id_usuario = int(time.time())
-            novo_usuario = {"id_usuario": id_usuario, "nome": dados.get('nome', '').strip(), "email": email_limpo, "cpf": cpf_limpo, "telefone": tel_limpo, "data_cadastro": datetime.utcnow().isoformat() + "Z"}
+            novo_usuario = {
+                "id_usuario": id_usuario,
+                "nome": dados.get('nome', '').strip(),
+                "email": email_limpo,
+                "cpf": cpf_limpo,
+                "telefone": tel_limpo,
+                "data_cadastro": datetime.utcnow().isoformat() + "Z",
+                "notifica_email": True,
+                "notifica_whatsapp": True
+            }
             db.collection('usuarios').document(str(id_usuario)).set(novo_usuario)
             return Response({"mensagem": "Conta criada!", "usuario": novo_usuario}, status=201)
         except Exception as e: return Response({"erro": str(e)}, status=500)
@@ -224,8 +244,21 @@ class UserDetailView(APIView):
         try:
             user_ref = db.collection('usuarios').document(str(id_usuario))
             if not user_ref.get().exists: return Response({"erro": "Não encontrado."}, status=404)
-            update_data = {"nome": request.data.get('nome'), "telefone": re.sub(r'\D', '', str(request.data.get('telefone', ''))), "cpf": re.sub(r'\D', '', str(request.data.get('cpf', '')))}
-            update_data = {k: v for k, v in update_data.items() if v}
+           
+            update_data = {}
+            if request.data.get('nome'):
+                update_data['nome'] = request.data.get('nome')
+            if request.data.get('telefone'):
+                update_data['telefone'] = re.sub(r'\D', '', str(request.data.get('telefone', '')))
+            if request.data.get('cpf'):
+                update_data['cpf'] = re.sub(r'\D', '', str(request.data.get('cpf', '')))
+           
+            # Preferências de notificação
+            if 'notifica_email' in request.data:
+                update_data['notifica_email'] = request.data.get('notifica_email')
+            if 'notifica_whatsapp' in request.data:
+                update_data['notifica_whatsapp'] = request.data.get('notifica_whatsapp')
+
             user_ref.update(update_data)
             return Response({"mensagem": "Atualizado!", "usuario": user_ref.get().to_dict()}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
@@ -314,7 +347,7 @@ class ProdutoDetailView(APIView):
         except Exception as e: return Response({"erro": str(e)}, status=500)
 
 # ==========================================
-# GESTÃO DE PEDIDOS E PAGAMENTO (STRIPE)
+# GESTÃO DE PEDIDOS E PAGAMENTO
 # ==========================================
 class PedidoCreateView(APIView):
     def post(self, request):
@@ -373,7 +406,7 @@ class PedidoCreateView(APIView):
                         })
 
                     checkout_session = stripe.checkout.Session.create(
-                        payment_method_types=['card', 'boleto'],
+                        payment_method_types=['card', 'boleto', 'pix'],
                         line_items=line_items,
                         mode='payment',
                         customer_email=user_email if '@' in user_email else None,
@@ -423,10 +456,83 @@ class PedidoStatusUpdateView(APIView):
             if not novo_status: return Response({"erro": "Status não fornecido."}, status=400)
            
             doc_ref = db.collection('pedidos').document(str(id_pedido))
-            if not doc_ref.get().exists: return Response({"erro": "Pedido não encontrado."}, status=404)
-            doc_ref.update({"status": novo_status})
+            pedido_snap = doc_ref.get()
+            if not pedido_snap.exists: return Response({"erro": "Pedido não encontrado."}, status=404)
            
-            return Response({"mensagem": "Status atualizado!", "status": novo_status}, status=200)
+            # Salvar alteração do pedido no banco de dados
+            doc_ref.update({"status": novo_status})
+            pedido_data = pedido_snap.to_dict()
+
+            # ========================================================
+            # NOVA LOGICA: NOTIFICAR O CLIENTE SEGUNDO AS PREFERÊNCIAS
+            # ========================================================
+            id_usuario = pedido_data.get('id_usuario')
+            if id_usuario:
+                user_snap = db.collection('usuarios').document(str(id_usuario)).get()
+                if user_snap.exists:
+                    user_data = user_snap.to_dict()
+                   
+                    # Carrega as preferências (Assume que se não existirem o campo, o padrão é True)
+                    notifica_email = user_data.get('notifica_email', True)
+                    notifica_wpp = user_data.get('notifica_whatsapp', True)
+                   
+                    email_cliente = user_data.get('email')
+                    telefone_cliente = user_data.get('telefone')
+                    primeiro_nome = user_data.get('nome', 'Cliente').split(' ')[0]
+
+                    # Mapear e formatar a lista de itens comprados no pedido
+                    itens = pedido_data.get('itens', [])
+                    lista_produtos = "\n".join([f"- {item.get('quantidade', 1)}x {item.get('nome_camisa', 'Produto')} (Tam: {item.get('tamanho', '')})" for item in itens])
+
+                    assunto = f"FUTGO! Atualização do Pedido {id_pedido}"
+                    mensagem_corpo = f"Olá {primeiro_nome}!\n\nO status do seu pedido {id_pedido} mudou para: *{novo_status}*.\n\nProdutos do Pedido:\n{lista_produtos}\n\nAcompanhe os detalhes no seu perfil no nosso site."
+
+                    # 1. Enviar E-mail
+                    if notifica_email and email_cliente and '@' in email_cliente:
+                        try:
+                            # Tira o asterisco do markdown para o texto do email
+                            send_mail(
+                                assunto,
+                                mensagem_corpo.replace('*', ''),
+                                settings.EMAIL_HOST_USER,
+                                [email_cliente],
+                                fail_silently=True
+                            )
+                            print(f"📧 E-mail de status enviado para {email_cliente}")
+                        except Exception as e:
+                            print(f"Erro ao enviar email de status: {e}")
+
+                    # 2. Enviar WhatsApp
+                    if notifica_wpp and telefone_cliente:
+                        try:
+                            account_sid = getattr(settings, 'TWILIO_ACCOUNT_SID', os.environ.get('TWILIO_ACCOUNT_SID'))
+                            auth_token = getattr(settings, 'TWILIO_AUTH_TOKEN', os.environ.get('TWILIO_AUTH_TOKEN'))
+                            twilio_number = getattr(settings, 'TWILIO_PHONE_NUMBER', os.environ.get('TWILIO_PHONE_NUMBER'))
+
+                            if account_sid and auth_token and twilio_number:
+                                client = Client(account_sid, auth_token)
+                               
+                                # Formatação do número para o Twilio (garantir DDI 55 se o cliente não colocou)
+                                tel_str = str(telefone_cliente).strip()
+                                if not tel_str.startswith('+'):
+                                    if not tel_str.startswith('55') and len(tel_str) <= 11:
+                                        tel_str = f"55{tel_str}"
+                                    to_number = f"whatsapp:+{tel_str}"
+                                else:
+                                    to_number = f"whatsapp:{tel_str}"
+
+                                from_number = f"whatsapp:{twilio_number}" if not str(twilio_number).startswith('whatsapp:') else twilio_number
+
+                                client.messages.create(
+                                    body=f"⚽ *{assunto}*\n\n{mensagem_corpo}",
+                                    from_=from_number,
+                                    to=to_number
+                                )
+                                print(f"📱 WhatsApp de status enviado para {to_number}")
+                        except Exception as e:
+                            print(f"Erro ao enviar WhatsApp de status: {e}")
+
+            return Response({"mensagem": "Status atualizado e notificações enviadas!", "status": novo_status}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
 
 # ==========================================
@@ -442,7 +548,6 @@ class RecomendacoesView(APIView):
             recomendados = []
             top_ids = []
 
-            # 1. Procurar no histórico de pedidos
             pedidos_docs = db.collection('pedidos').get()
             produtos_relacionados_count = {}
 
@@ -466,7 +571,6 @@ class RecomendacoesView(APIView):
                 if len(recomendados) >= 4:
                     break
 
-            # 2. Se tiver menos de 4, preenche com produtos da MESMA CATEGORIA
             if len(recomendados) < 4:
                 base_prod = db.collection('produtos').document(str(produto_id)).get()
                 if base_prod.exists:
@@ -481,7 +585,6 @@ class RecomendacoesView(APIView):
                             if len(recomendados) >= 4:
                                 break
 
-            # 3. Se AINDA tiver menos de 3, preenche com QUALQUER PRODUTO da loja
             if len(recomendados) < 3:
                 all_prods = db.collection('produtos').limit(15).get()
                 for ap in all_prods:

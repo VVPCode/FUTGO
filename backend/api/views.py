@@ -306,16 +306,34 @@ class ProdutoListView(APIView):
             dados = request.data
             id_prod = str(uuid.uuid4())
             
+            # ==========================================
+            # CORREÇÃO AQUI: Aceitar a imagem vinda do Mobile
+            # ==========================================
+            imagem_recebida = dados.get('imagem', '')
             imagens_lista = dados.get('imagens', [])
-            imagem_principal = imagens_lista[0] if imagens_lista else ""
+            
+            # Se vier uma imagem do mobile, colocamo-la também na lista para o site React não quebrar
+            if imagem_recebida and not imagens_lista:
+                imagens_lista = [imagem_recebida]
+                
+            imagem_principal = imagem_recebida if imagem_recebida else (imagens_lista[0] if imagens_lista else "")
             
             novo_prod = {
-                "id": id_prod, "nome_camisa": dados.get('nome_camisa', ''), "preco": float(dados.get('preco', 0.0)),
-                "categoria": dados.get('categoria', 'Nacional'), "imagem": imagem_principal, "imagens": imagens_lista,
-                "cores": dados.get('cores', []), "pais": dados.get('pais', ''), "liga": dados.get('liga', ''),
-                "tamanhos": dados.get('tamanhos', ['P', 'M', 'G', 'GG']), "temporada": dados.get('temporada', ''),
-                "tipo_uniforme": dados.get('tipo_uniforme', 'Primeira Camisa'), "marca": dados.get('marca', ''),
-                "genero": dados.get('genero', 'Unissex'), "personalizavel": bool(dados.get('personalizavel', False)),
+                "id": id_prod, 
+                "nome_camisa": dados.get('nome_camisa', ''), 
+                "preco": float(dados.get('preco', 0.0)),
+                "categoria": dados.get('categoria', 'Nacional'), 
+                "imagem": imagem_principal, 
+                "imagens": imagens_lista,
+                "cores": dados.get('cores', []), 
+                "pais": dados.get('pais', ''), 
+                "liga": dados.get('liga', ''),
+                "tamanhos": dados.get('tamanhos', ['P', 'M', 'G', 'GG']), 
+                "temporada": dados.get('temporada', ''),
+                "tipo_uniforme": dados.get('tipo_uniforme', 'Primeira Camisa'), 
+                "marca": dados.get('marca', ''),
+                "genero": dados.get('genero', 'Unissex'), 
+                "personalizavel": bool(dados.get('personalizavel', False)),
                 "data_criacao": datetime.utcnow().isoformat() + "Z"
             }
             db.collection('produtos').document(id_prod).set(novo_prod)

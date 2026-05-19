@@ -40,8 +40,10 @@ urlpatterns = [
     # ROTAS DO CATÁLOGO DE PRODUTOS
     # ==========================
     path('produtos/', ProdutoListView.as_view(), name='produto_list'),
+    
+    # Rota usada para o CRUD e para a atualização rápida de STOCK (via PATCH/PUT)
     path('produtos/<str:id_produto>/', ProdutoDetailView.as_view(), name='produto_detail'),
-   
+    
     # ==========================
     # ROTA DE UPLOAD DE ARQUIVOS
     # ==========================
@@ -52,12 +54,12 @@ urlpatterns = [
     # ==========================
     path('pedidos/', PedidoCreateView.as_view(), name='pedido_create'),
     path('pedidos/user/<int:id_usuario>/', PedidoUserListView.as_view(), name='pedido_user_list'),
-   
+    
     # ==========================
     # ROTA DE SUGESTÃO DE PRODUTOS
     # ==========================
     path('recomendacoes/', RecomendacoesView.as_view(), name='recomendacoes'),
-   
+    
     # ==========================
     # ROTAS GESTÃO ADMIN DE PEDIDOS
     # ==========================

@@ -1,11 +1,36 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
+const BACKEND_URL = 'http://localhost:8000'; // Guardamos o base do Django
+
+// ==========================================
+// 🛠️ FUNÇÃO MÁGICA: CORRETOR DE IMAGENS (SUPER POTENTE) 🛠️
+// ==========================================
+const formatImageUrl = (url) => {
+  if (!url) return 'https://placehold.co/400x500/cccccc/ffffff?text=Sem+Foto';
+ 
+  let fixedUrl = url;
+
+  // 1. Substitui o IP do emulador pelo localhost
+  if (fixedUrl.includes('10.0.2.2')) {
+    fixedUrl = fixedUrl.replace('10.0.2.2', 'localhost');
+  }
+
+  // 2. Se a URL começar com /media (caminho relativo)
+  if (fixedUrl.startsWith('/media/')) {
+    fixedUrl = `${BACKEND_URL}${fixedUrl}`;
+  }
+
+  // 3. Limpeza de erros comuns (barras duplas geradas acidentalmente)
+  fixedUrl = fixedUrl.replace(/([^:]\/)\/+/g, "$1");
+
+  return fixedUrl;
+};
 
 const getFirebaseConfig = () => {
   try {
@@ -23,6 +48,7 @@ const getFirebaseConfig = () => {
 };
 
 const firebaseConfig = getFirebaseConfig();
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 let firebaseAuth, googleProvider, facebookProvider, dbFrontend;
 try {
@@ -54,6 +80,7 @@ const formatarIdentificador = (val) => {
 
 export default function App() {
   const [appUser, setAppUser] = useState(null);
+  const [firebaseUser, setFirebaseUser] = useState(null);
   const [produtos, setProdutos] = useState([]);
   const [isLoadingProdutos, setIsLoadingProdutos] = useState(true);
   const isLoggingInRef = useRef(false);
@@ -88,7 +115,6 @@ export default function App() {
   const [editTelefone, setEditTelefone] = useState('');
   const [editCpf, setEditCpf] = useState('');
  
-  // NOVOS ESTADOS PARA PREFERÊNCIAS DE NOTIFICAÇÃO
   const [notificaEmail, setNotificaEmail] = useState(true);
   const [notificaWhatsapp, setNotificaWhatsapp] = useState(true);
  
@@ -138,8 +164,8 @@ export default function App() {
  
   const [pedidosUsuario, setPedidosUsuario] = useState([]);
   const [notificacaoInApp, setNotificacaoInApp] = useState(null);
- 
   const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
+  const [favoritosIds, setFavoritosIds] = useState([]);
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
@@ -147,7 +173,6 @@ export default function App() {
     const fetchRecomendacoes = async () => {
       if (cart.length > 0 && isCartOpen) {
         const baseItem = cart[cart.length - 1];
-       
         try {
           const res = await fetch(`${API_BASE_URL}/recomendacoes/?produto_id=${baseItem.id}`);
           if (res.ok) {
@@ -168,7 +193,6 @@ export default function App() {
         setRecomendacoesCarrinho([]);
       }
     };
-
     fetchRecomendacoes();
   }, [cart, isCartOpen, produtos]);
 
@@ -205,22 +229,16 @@ export default function App() {
 
     let isInitialLoad = true;
     const previousStatuses = new Map();
-
     const q = query(collection(dbFrontend, 'pedidos'), where('id_usuario', '==', Number(appUser.id_usuario)));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const pedidosAtualizados = [];
-     
       snapshot.docChanges().forEach((change) => {
         const pedido = change.doc.data();
-       
         if (change.type === 'added') {
           previousStatuses.set(pedido.id_pedido, pedido.status);
-          if (!isInitialLoad) {
-            mostrarNotificacao('Pedido Registado! ⚽', `Pedido ${pedido.id_pedido} criado.`);
-          }
+          if (!isInitialLoad) mostrarNotificacao('Pedido Registado! ⚽', `Pedido ${pedido.id_pedido} criado.`);
         }
-       
         if (change.type === 'modified') {
           const oldStatus = previousStatuses.get(pedido.id_pedido);
           if (oldStatus !== pedido.status) {
@@ -229,16 +247,57 @@ export default function App() {
           }
         }
       });
-
       snapshot.forEach(doc => pedidosAtualizados.push(doc.data()));
       pedidosAtualizados.sort((a, b) => new Date(b.data_pedido) - new Date(a.data_pedido));
       setPedidosUsuario(pedidosAtualizados);
-     
       isInitialLoad = false;
     });
 
     return () => unsubscribe();
   }, [appUser]);
+
+  useEffect(() => {
+    if (!firebaseUser || !dbFrontend) {
+      setFavoritosIds([]);
+      return;
+    }
+   
+    const favRef = collection(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos');
+    const unsubscribe = onSnapshot(favRef,
+      (snapshot) => {
+        const ids = snapshot.docs.map(doc => doc.id);
+        setFavoritosIds(ids);
+      },
+      (error) => {
+        console.error("Erro ao procurar favoritos:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [firebaseUser]);
+
+  const toggleFavorito = async (produto) => {
+    if (!firebaseUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+   
+    const prodIdStr = produto.id?.toString();
+    if (!prodIdStr) return;
+
+    try {
+      const docRef = doc(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos', prodIdStr);
+     
+      if (favoritosIds.includes(prodIdStr)) {
+        await deleteDoc(docRef);
+      } else {
+        await setDoc(docRef, { adicionado_em: new Date().toISOString() });
+        mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
+      }
+    } catch (error) {
+      console.error("Erro ao favoritar:", error);
+    }
+  };
 
   useEffect(() => {
     if (notificacaoInApp) {
@@ -256,6 +315,8 @@ export default function App() {
     fetchProdutos();
     if (firebaseAuth) {
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+        setFirebaseUser(user);
+       
         if (user && !appUser && !isLoggingInRef.current) {
           try {
             await new Promise(resolve => setTimeout(resolve, 2000));
@@ -368,7 +429,6 @@ export default function App() {
     setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
     setEditNome(appUser.nome); setEditTelefone(appUser.telefone); setEditCpf(appUser.cpf || '');
    
-    // Inicia os toggles, se não existir o campo, assume true (para novos e antigos utilizadores)
     setNotificaEmail(appUser.notifica_email !== false);
     setNotificaWhatsapp(appUser.notifica_whatsapp !== false);
 
@@ -409,7 +469,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try { if (firebaseAuth) await signOut(firebaseAuth); } catch (error) { console.error("Erro ao sair:", error); }
-    setAppUser(null); setIsProfileModalOpen(false); setCart([]); setPedidosUsuario([]);
+    setAppUser(null); setFirebaseUser(null); setIsProfileModalOpen(false); setCart([]); setPedidosUsuario([]); setFavoritosIds([]);
   };
 
   const handleDeleteAccount = async () => {
@@ -419,7 +479,7 @@ export default function App() {
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao apagar conta.');
       if (firebaseAuth) await signOut(firebaseAuth);
-      setAppUser(null); setIsProfileModalOpen(false); alert("Conta apagada.");
+      setAppUser(null); setFirebaseUser(null); setIsProfileModalOpen(false); alert("Conta apagada.");
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
 
@@ -531,12 +591,16 @@ export default function App() {
 
   const handleAdminEdit = (produto) => {
     setAdminErro(''); setAdminProdutoEditing(produto);
-    setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria); setProdImagem(produto.imagem || '');
+    setProdNome(produto.nome_camisa); setProdPreco(produto.preco); setProdCategoria(produto.categoria);
+    setProdImagem(formatImageUrl(produto.imagem || ''));
+   
     setProdCores(produto.cores || []); setProdPais(produto.pais || ''); setProdLiga(produto.liga || ''); setProdTamanhos(produto.tamanhos || ['P', 'M', 'G', 'GG']);
     setProdTemporada(produto.temporada || ''); setProdTipo(produto.tipo_uniforme || 'Primeira Camisa'); setProdMarca(produto.marca || '');
     setProdGenero(produto.genero || 'Unissex'); setProdPersonalizavel(produto.personalizavel || false);
+   
     const imagensExistentes = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
-    setProdImagensSalvas(imagensExistentes); setProdNovosArquivos([]); setAdminTab('formulario');
+    setProdImagensSalvas(imagensExistentes.map(img => formatImageUrl(img)));
+    setProdNovosArquivos([]); setAdminTab('formulario');
   };
 
   const handleAdminNew = () => {
@@ -736,7 +800,15 @@ export default function App() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {produtosFiltrados.length > 0 ? produtosFiltrados.map((produto) => <ProductCard key={produto.id || Math.random()} produto={produto} onAdd={addToCart} />) : <div className="col-span-full text-center py-12 text-gray-500">Nenhum produto encontrado com estes filtros.</div>}
+            {produtosFiltrados.length > 0 ? produtosFiltrados.map((produto) => (
+              <ProductCard
+                key={produto.id || Math.random()}
+                produto={produto}
+                onAdd={addToCart}
+                isFavorito={favoritosIds.includes(produto.id?.toString())}
+                onToggleFavorito={() => toggleFavorito(produto)}
+              />
+            )) : <div className="col-span-full text-center py-12 text-gray-500">Nenhum produto encontrado com estes filtros.</div>}
           </div>
         )}
       </main>
@@ -811,10 +883,13 @@ export default function App() {
               <button onClick={() => setIsProfileModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
             </div>
            
-            <div className="flex border-b border-gray-200 bg-white">
-              <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
-              <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
-              <button onClick={() => setProfileTab('pedidos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${profileTab === 'pedidos' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Meus Pedidos <span className="ml-1 bg-gray-100 text-gray-600 py-0.5 px-2 rounded-full text-xs">{pedidosUsuario.length}</span></button>
+            <div className="flex border-b border-gray-200 bg-white overflow-x-auto scrollbar-hide">
+              <button onClick={() => setProfileTab('dados')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 whitespace-nowrap px-4 ${profileTab === 'dados' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Dados</button>
+              <button onClick={() => setProfileTab('enderecos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 whitespace-nowrap px-4 ${(profileTab === 'enderecos' || profileTab === 'novo_endereco') ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Endereços</button>
+              <button onClick={() => setProfileTab('pedidos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 whitespace-nowrap px-4 ${profileTab === 'pedidos' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>Meus Pedidos <span className="ml-1 bg-gray-100 text-gray-600 py-0.5 px-2 rounded-full text-xs">{pedidosUsuario.length}</span></button>
+              <button onClick={() => setProfileTab('desejos')} className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 whitespace-nowrap px-4 ${profileTab === 'desejos' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>
+                Desejos <span className="ml-1 bg-gray-100 text-gray-600 py-0.5 px-2 rounded-full text-xs">{favoritosIds.length}</span>
+              </button>
             </div>
 
             <div className="p-6 overflow-y-auto">
@@ -833,9 +908,6 @@ export default function App() {
                       <div><label className="block text-sm font-medium mb-1 text-gray-500">E-mail</label><input type="email" value={appUser.email} disabled className="w-full px-4 py-2 border rounded-lg disabled:bg-gray-100" /></div>
                     </div>
 
-                    {/* ======================================================== */}
-                    {/* NOVA SECÇÃO: PREFERÊNCIAS DE NOTIFICAÇÃO                 */}
-                    {/* ======================================================== */}
                     <div className="pt-4 border-t border-gray-100 mt-4 space-y-3">
                       <h4 className="text-sm font-bold text-gray-800">Preferências de Notificação (Status do Pedido)</h4>
                      
@@ -957,6 +1029,46 @@ export default function App() {
                 </div>
               )}
 
+              {/* ABA DE LISTA DE DESEJOS (FAVORITOS) */}
+              {profileTab === 'desejos' && (
+                <div className="space-y-4">
+                  {favoritosIds.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Star className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                      <p className="text-gray-500 font-medium">A sua lista de desejos está vazia.</p>
+                      <p className="text-sm text-gray-400 mt-1">Navegue pelo catálogo e clique na estrela para guardar as suas camisas favoritas.</p>
+                      <button onClick={() => setIsProfileModalOpen(false)} className="mt-4 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm">Ver Catálogo</button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {produtos.filter(p => favoritosIds.includes(p.id?.toString())).map(produto => (
+                        <div key={produto.id} className="flex gap-3 border rounded-lg p-3 bg-white relative hover:shadow-sm transition-shadow">
+                          <img src={formatImageUrl(produto.imagem || (produto.imagens && produto.imagens[0]))} className="w-20 h-20 object-cover rounded bg-gray-50 border border-gray-100" />
+                          <div className="flex-1 pt-1">
+                             <h4 className="font-bold text-sm text-gray-800 line-clamp-2 leading-snug pr-6">{produto.nome_camisa}</h4>
+                             <p className="font-extrabold text-slate-900 mt-2">R$ {Number(produto.preco).toFixed(2)}</p>
+                          </div>
+                          <button
+                            onClick={() => toggleFavorito(produto)}
+                            className="absolute top-2 right-2 p-1.5 bg-yellow-50 hover:bg-yellow-100 rounded-full transition-colors group"
+                            title="Remover dos favoritos"
+                          >
+                            <Star className="w-5 h-5 fill-yellow-400 text-yellow-500 group-hover:scale-110 transition-transform" />
+                          </button>
+                         
+                          <button
+                            onClick={() => addToCart(produto, produto.tamanhos?.[0] || 'M')}
+                            className="absolute bottom-3 right-3 text-xs font-bold text-green-600 hover:text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded"
+                          >
+                            + Carrinho
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
           </div>
         </div>
@@ -1040,7 +1152,7 @@ export default function App() {
                         {produtos.map(p => (
                           <tr key={p.id}>
                             <td className="px-4 py-2 flex items-center gap-3">
-                              <img src={p.imagem} className="w-10 h-10 rounded object-cover" onError={(e) => e.target.src = "https://placehold.co/100?text=Foto"} />
+                              <img src={formatImageUrl(p.imagem)} className="w-10 h-10 rounded object-cover" onError={(e) => e.target.src = "https://placehold.co/100?text=Foto"} />
                               <span className="font-medium">{p.nome_camisa}</span>
                             </td>
                             <td className="px-4 py-2 text-gray-600">{p.categoria} / {p.liga || '-'}</td>
@@ -1060,225 +1172,61 @@ export default function App() {
               {adminTab === 'formulario' && (
                 <form onSubmit={handleAdminSaveProduct} className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
                   <div className="flex justify-between items-center mb-6 border-b pb-4">
-                    <h4 className="font-bold text-gray-800 text-lg">Detalhes do Produto</h4>
-                    <button type="button" onClick={() => setAdminTab('lista')} className="text-sm text-gray-500 hover:underline">Cancelar</button>
+                    <h4 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                      {adminProdutoEditing ? <Edit className="w-5 h-5 text-blue-500"/> : <PlusCircle className="w-5 h-5 text-green-500"/>}
+                      {adminProdutoEditing ? 'Editar Produto' : 'Criar Novo Produto'}
+                    </h4>
+                    <button type="button" onClick={() => setAdminTab('lista')} className="text-sm text-gray-500 hover:underline">Cancelar e Voltar</button>
                   </div>
 
                   <div className="space-y-5">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Camisa *</label>
-                      <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-green-500" placeholder="Ex: Camisa Brasil Titular 2024" />
+                      <input type="text" required value={prodNome} onChange={e => setProdNome(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="Ex: Camisa Seleção Brasileira 2024..." />
                     </div>
                    
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium mb-1">Preço (R$) *</label>
-                        <input type="number" step="0.01" required value={prodPreco} onChange={e => setProdPreco(e.target.value)} className="w-full px-4 py-2 border rounded-lg" />
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Preço (R$) *</label>
+                        <input type="number" step="0.01" min="0" required value={prodPreco} onChange={e => setProdPreco(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="299.90" />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium mb-1">Categoria Principal *</label>
-                        <select required value={prodCategoria} onChange={e => setProdCategoria(e.target.value)} className="w-full px-4 py-2 border rounded-lg">
-                          <option value="Nacional">Nacional</option><option value="Europa">Europa</option><option value="Seleções">Seleções</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Tipo de Uniforme</label>
-                        <select value={prodTipo} onChange={e => setProdTipo(e.target.value)} className="w-full px-4 py-2 border rounded-lg">
-                          <option value="Primeira Camisa">Primeira Camisa (Home)</option>
-                          <option value="Segunda Camisa">Segunda Camisa (Away)</option>
-                          <option value="Terceira Camisa">Terceira Camisa (Third)</option>
-                          <option value="Treino">Treino</option>
-                          <option value="Goleiro">Goleiro</option>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Categoria *</label>
+                        <select required value={prodCategoria} onChange={e => setProdCategoria(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white">
+                          <option value="Nacional">Nacional</option>
+                          <option value="Europa">Europa</option>
+                          <option value="Seleções">Seleções</option>
                         </select>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Temporada</label>
-                        <input type="text" value={prodTemporada} onChange={e => setProdTemporada(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: 2024/25, Retrô" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1">País</label>
-                        <input type="text" value={prodPais} onChange={e => setProdPais(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasil" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Liga</label>
-                        <input type="text" value={prodLiga} onChange={e => setProdLiga(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: brasileirão" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Marca / Fornecedor</label>
-                        <input type="text" value={prodMarca} onChange={e => setProdMarca(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="Ex: nike, adidas" />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Público (Género)</label>
-                        <select value={prodGenero} onChange={e => setProdGenero(e.target.value)} className="w-full px-4 py-2 border rounded-lg">
-                          <option value="Masculino">Masculino</option><option value="Feminino">Feminino</option><option value="Infantil">Infantil</option><option value="Unissex">Unissex</option>
-                        </select>
-                      </div>
-                      <div className="flex items-end pb-1">
-                        <label className="flex items-center gap-3 cursor-pointer p-2 border rounded-lg w-full bg-white hover:bg-gray-50">
-                          <input type="checkbox" checked={prodPersonalizavel} onChange={e => setProdPersonalizavel(e.target.checked)} className="w-5 h-5 text-green-600 rounded" />
-                          <span className="text-sm font-bold text-gray-800">Aceita Personalização (Nome/Número)</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Cores Predominantes</label>
-                      <div className="flex flex-wrap gap-2">
-                        {['vermelho', 'azul', 'branco', 'preto', 'verde', 'amarelo', 'cinza', 'rosa', 'roxo', 'laranja', 'bordo', 'dourado'].map(c => (
-                          <button type="button" key={c} onClick={() => setProdCores(prev => prev.includes(c) ? prev.filter(item => item !== c) : [...prev, c])} className={`px-3 py-1 rounded text-sm font-bold border transition-colors capitalize ${prodCores.includes(c) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600'}`}>{c}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Tamanhos Disponíveis</label>
-                      <div className="flex flex-wrap gap-2">
-                        {['P', 'M', 'G', 'GG', 'XG'].map(t => (
-                          <button type="button" key={t} onClick={() => setProdTamanhos(prev => prev.includes(t) ? prev.filter(item => item !== t) : [...prev, t])} className={`w-10 h-10 rounded font-bold border transition-colors ${prodTamanhos.includes(t) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600'}`}>{t}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
-                      <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2"><ImageIcon className="w-5 h-5"/> Imagens do Produto *</label>
-                      <p className="text-xs text-blue-700 mb-4">Carregue as imagens a partir do seu computador. A primeira imagem será a capa do produto.</p>
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                      <label className="block text-sm font-bold text-gray-800 mb-1 flex items-center gap-1.5"><ImageIcon className="w-4 h-4 text-green-600"/> URL da Imagem do Produto *</label>
+                      <p className="text-xs text-gray-500 mb-3">É obrigatório fornecer no mínimo uma imagem para este produto (Insira um link HTTP/HTTPS).</p>
                      
-                      <div className="mb-4">
-                        <label className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm">
-                          <UploadCloud className="w-5 h-5" /> Adicionar Fotos
-                          <input type="file" multiple accept="image/*" onChange={handleFileSelect} className="hidden" />
-                        </label>
-                      </div>
-
-                      {(prodImagensSalvas.length > 0 || prodNovosArquivos.length > 0) ? (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4 mt-4 bg-white p-4 rounded-lg border border-blue-100">
-                          {prodImagensSalvas.map((url, i) => (
-                            <div key={`salva-${i}`} className="relative group rounded-lg overflow-hidden border border-gray-200 h-24 bg-gray-100 flex items-center justify-center">
-                              {i === 0 && <span className="absolute top-1 left-1 bg-green-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded z-10">CAPA</span>}
-                              <img src={url} className="w-full h-full object-cover" />
-                              <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                <button type="button" onClick={() => removerImagemSalva(i)} className="bg-red-500 text-white p-1.5 rounded-full hover:bg-red-600"><Trash2 className="w-4 h-4"/></button>
-                              </div>
-                            </div>
-                          ))}
-
-                          {prodNovosArquivos.map((item, i) => (
-                            <div key={`nova-${i}`} className="relative group rounded-lg overflow-hidden border-2 border-blue-400 border-dashed h-24 bg-blue-50 flex items-center justify-center">
-                              {prodImagensSalvas.length === 0 && i === 0 && <span className="absolute top-1 left-1 bg-green-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded z-10">CAPA</span>}
-                              <span className="absolute bottom-0 w-full bg-blue-600 text-white text-[9px] text-center py-0.5 z-10 font-medium">NOVA</span>
-                              <img src={item.preview} className="w-full h-full object-cover" />
-                              <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20">
-                                <button type="button" onClick={() => removerNovaImagem(i)} className="bg-red-500 text-white p-1.5 rounded-full hover:bg-red-600"><Trash2 className="w-4 h-4"/></button>
-                              </div>
-                            </div>
-                          ))}
+                      <input type="url" required value={prodImagem} onChange={e => setProdImagem(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none mb-4" placeholder="https://exemplo.com/imagem_camisa.jpg" />
+                     
+                      {prodImagem ? (
+                        <div className="mt-2 text-center bg-white p-2 rounded border border-dashed border-gray-300 inline-block">
+                          <p className="text-xs text-gray-500 mb-2">Pré-visualização da Imagem:</p>
+                          <img src={formatImageUrl(prodImagem)} alt="Preview" className="h-40 object-contain mx-auto rounded" onError={(e) => e.target.src = "https://placehold.co/400x500/ffcccc/ff0000?text=Link+Invalido"} />
                         </div>
                       ) : (
-                        <div className="mt-4 pt-4 border-t border-blue-100">
-                          <label className="block text-sm font-bold text-gray-700 mb-2">Ou use URL Antiga (Fallback)</label>
-                          <input type="url" value={prodImagem} onChange={e => setProdImagem(e.target.value)} className="w-full px-4 py-2 border rounded-lg" placeholder="https://exemplo.com/imagem.jpg" />
+                        <div className="mt-2 flex items-center justify-center h-20 bg-gray-100 border border-dashed border-gray-300 rounded text-gray-400 text-sm">
+                          Insira um link acima para ver a imagem
                         </div>
                       )}
                     </div>
                   </div>
-                  <button type="submit" disabled={isAdminLoading} className="w-full py-3 bg-green-600 text-white font-bold rounded-lg mt-6 flex justify-center items-center gap-2">
-                    {isAdminLoading && <Loader2 className="w-5 h-5 animate-spin" />}
-                    {isAdminLoading ? 'A Salvar...' : 'Salvar Produto no Catálogo'}
-                  </button>
+
+                  <div className="mt-8 flex gap-3">
+                    <button type="submit" disabled={isAdminLoading} className="flex-1 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-70">
+                      {isAdminLoading ? 'A sincronizar com a Base de Dados...' : (adminProdutoEditing ? 'Salvar Alterações na Nuvem' : 'Criar Produto no Catálogo')}
+                    </button>
+                  </div>
                 </form>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DO CARRINHO */}
-      {isCartOpen && (
-        <div className="fixed inset-0 z-40 overflow-hidden">
-          <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsCartOpen(false)} />
-          <div className="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-xl flex flex-col z-50">
-            <div className="flex items-center justify-between px-4 py-6 border-b border-gray-200">
-              <h2 className="text-lg font-medium text-gray-900 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-green-600"/> O seu Carrinho</h2>
-              <button onClick={() => setIsCartOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
-            </div>
-           
-            <div className="flex-1 overflow-y-auto">
-              <div className="px-4 py-4">
-                {cart.length === 0 ? <p className="text-center text-gray-500 py-10">Carrinho vazio.</p> : (
-                  <ul className="divide-y divide-gray-100">
-                    {cart.map((item) => {
-                      const imgUrl = (item.imagens && item.imagens.length > 0) ? item.imagens[0] : (item.imagem || 'https://placehold.co/100?text=Sem+Foto');
-                      const precoNumerico = Number(String(item.preco).replace(',', '.')) || 0;
-
-                      return (
-                        <li key={`${item.id}-${item.tamanho}`} className="py-4 flex">
-                          <img src={imgUrl} className="w-16 h-16 rounded object-cover border border-gray-100" />
-                          <div className="ml-4 flex-1">
-                            <div className="flex justify-between">
-                              <h3 className="text-sm font-medium text-gray-900 leading-tight pr-4">{item.nome_camisa}</h3>
-                              <button onClick={() => removeFromCart(item.id, item.tamanho)} className="text-gray-400 hover:text-red-500 shrink-0"><Trash2 className="w-4 h-4" /></button>
-                            </div>
-                            <p className="text-xs text-gray-500 mt-1">Tam: <span className="font-bold text-gray-800">{item.tamanho}</span></p>
-                            <div className="flex justify-between items-center mt-3">
-                              <div className="flex items-center gap-2 border border-gray-300 rounded">
-                                <button className="p-1 text-gray-600 hover:bg-gray-100" onClick={()=>updateQuantity(item.id, item.tamanho, -1)}><Minus className="w-3 h-3"/></button>
-                                <span className="text-sm px-2 font-medium">{item.quantidade}</span>
-                                <button className="p-1 text-gray-600 hover:bg-gray-100" onClick={()=>updateQuantity(item.id, item.tamanho, 1)}><Plus className="w-3 h-3"/></button>
-                              </div>
-                              <p className="font-extrabold text-slate-900">R$ {(precoNumerico * item.quantidade).toFixed(2)}</p>
-                            </div>
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              {recomendacoesCarrinho.length > 0 && cart.length > 0 && (
-                <div className="mt-4 border-t border-gray-200 bg-blue-50 p-4">
-                  <h3 className="text-xs font-black text-blue-900 uppercase tracking-wider flex items-center gap-1.5 mb-3">
-                    <Sparkles className="w-4 h-4 text-blue-600" /> Quem comprou, também levou:
-                  </h3>
-                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide snap-x">
-                    {recomendacoesCarrinho.map(rec => {
-                      const imgUrl = (rec.imagens && rec.imagens.length > 0) ? rec.imagens[0] : (rec.imagem || 'https://placehold.co/100?text=Sem+Foto');
-                      return (
-                        <div key={rec.id} className="min-w-[130px] w-[130px] bg-white border border-blue-100 rounded-lg p-2 flex flex-col snap-start shadow-sm">
-                          <img src={imgUrl} className="w-full h-[80px] object-cover rounded mb-2 bg-gray-50" />
-                          <h4 className="text-[11px] font-semibold text-gray-800 line-clamp-2 leading-snug mb-1" title={rec.nome_camisa}>{rec.nome_camisa}</h4>
-                          <p className="text-xs font-extrabold text-blue-700 mt-auto">R$ {Number(rec.preco).toFixed(2)}</p>
-                          <button
-                            onClick={() => addToCart(rec, rec.tamanhos?.[0] || 'M')}
-                            className="mt-2 w-full py-1.5 bg-blue-600 text-white text-[10px] font-bold uppercase rounded hover:bg-blue-700 transition-colors"
-                          >
-                            + Adicionar
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {cart.length > 0 && (
-              <div className="p-6 border-t border-gray-200 bg-white">
-                <div className="flex justify-between items-end mb-4">
-                  <span className="text-gray-500 text-sm font-medium">Total Estimado</span>
-                  <span className="font-black text-2xl text-slate-900">R$ {cartTotal.toFixed(2)}</span>
-                </div>
-                <button onClick={handleIniciarCheckout} className="w-full bg-green-600 text-white py-3.5 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors text-lg">
-                  Finalizar Compra
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -1344,267 +1292,4 @@ export default function App() {
                   ].map(frete => (
                     <label key={frete.tipo} className={`flex items-center justify-between p-4 border rounded-lg cursor-pointer transition-colors ${checkoutData.frete?.tipo === frete.tipo ? 'border-blue-500 bg-blue-50' : 'hover:bg-gray-50'}`}>
                       <div className="flex items-center gap-3">
-                        <input type="radio" name="frete" className="w-4 h-4 text-blue-600" checked={checkoutData.frete?.tipo === frete.tipo} onChange={() => setCheckoutData({...checkoutData, frete})} />
-                        <div>
-                          <p className="font-bold text-gray-900 flex items-center gap-2"><Truck className="w-4 h-4 text-gray-500"/> {frete.tipo}</p>
-                          <p className="text-sm text-gray-600">Chega em até {frete.prazo} dias úteis</p>
-                        </div>
-                      </div>
-                      <span className="font-bold text-blue-700">R$ {frete.valor.toFixed(2)}</span>
-                    </label>
-                  ))}
-                  <div className="pt-4 flex justify-between border-t mt-4">
-                    <button onClick={() => setCheckoutStep(1)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
-                    <button disabled={!checkoutData.frete} onClick={() => setCheckoutStep(3)} className="bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors">Continuar para Pagamento</button>
-                  </div>
-                </div>
-              )}
-
-              {checkoutStep === 3 && (
-                <div className="space-y-6">
-                  {/* Resumo */}
-                  <div className="bg-blue-50 p-5 rounded-xl border border-blue-100 flex items-center justify-between shadow-sm">
-                    <div>
-                      <p className="text-sm text-blue-800 font-medium mb-1">Resumo do Pedido</p>
-                      <p className="font-extrabold text-2xl text-slate-900">Total a pagar: R$ {(cartTotal + checkoutData.frete.valor).toFixed(2)}</p>
-                    </div>
-                    <Box className="w-10 h-10 text-blue-300" />
-                  </div>
-
-                  <div className="bg-white border-2 border-gray-200 rounded-xl p-8 text-center space-y-4">
-                    <div className="flex justify-center gap-4 mb-4">
-                      <ShieldCheck className="w-12 h-12 text-blue-500" />
-                    </div>
-                    <h4 className="font-bold text-xl text-gray-800">Checkout Seguro Criptografado</h4>
-                    <p className="text-sm text-gray-600 max-w-md mx-auto">
-                      Ao clicar no botão abaixo, será redirecionado para a página oficial de checkout, onde poderá introduzir os seus dados de pagamento com total segurança.
-                    </p>
-                  </div>
-
-                  <div className="pt-4 flex justify-between border-t mt-6">
-                    <button onClick={() => setCheckoutStep(2)} className="text-gray-500 px-4 py-2 font-medium hover:bg-gray-100 rounded-lg">Voltar</button>
-                    <button onClick={handleFinalizarCompra} disabled={checkoutLoading} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-md disabled:opacity-50">
-                      {checkoutLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ExternalLink className="w-5 h-5" />}
-                      Ir para o Pagamento
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DO FILTRO LATERAL AVANÇADO */}
-      {isFilterSidebarOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden">
-          <div className="absolute inset-0 bg-black bg-opacity-50 transition-opacity" onClick={() => setIsFilterSidebarOpen(false)} />
-          <div className="fixed inset-y-0 left-0 w-full max-w-xs bg-white shadow-xl flex flex-col z-50 overflow-y-auto">
-            <div className="flex items-center justify-between px-4 py-6 border-b border-gray-200 sticky top-0 bg-white z-10">
-              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Filter className="w-5 h-5"/> Filtros Refinados</h2>
-              <button onClick={() => setIsFilterSidebarOpen(false)} className="text-gray-400 hover:text-gray-600"><X /></button>
-            </div>
-           
-            <div className="p-4 space-y-6">
-             
-              <div className="bg-green-50 p-3 rounded-lg border border-green-100 flex items-center justify-between cursor-pointer" onClick={() => setFiltrosAvancados({...filtrosAvancados, personalizavel: !filtrosAvancados.personalizavel})}>
-                <span className="text-sm font-bold text-green-900">Aceita Personalização</span>
-                <div className={`w-10 h-6 flex items-center bg-gray-300 rounded-full p-1 duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'bg-green-500' : ''}`}>
-                  <div className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-300 ease-in-out ${filtrosAvancados.personalizavel ? 'translate-x-4' : ''}`}></div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-sm font-bold text-gray-900 mb-2">Faixa de Preço (R$)</h3>
-                <div className="flex items-center gap-2">
-                  <input type="number" placeholder="Mínimo" value={filtrosAvancados.precoMin} onChange={(e) => setFiltrosAvancados({...filtrosAvancados, precoMin: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm outline-none focus:border-green-500" />
-                  <span className="text-gray-400">-</span>
-                  <input type="number" placeholder="Máximo" value={filtrosAvancados.precoMax} onChange={(e) => setFiltrosAvancados({...filtrosAvancados, precoMax: e.target.value})} className="w-full px-3 py-2 border rounded-md text-sm outline-none focus:border-green-500" />
-                </div>
-              </div>
-
-              {opcoesFiltro.generos.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Género / Público</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {opcoesFiltro.generos.map(g => (
-                      <button key={g} onClick={() => toggleFiltroArray('generos', g)} className={`py-1.5 text-xs font-bold border rounded-md transition-colors ${filtrosAvancados.generos.includes(g) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 border-gray-300'}`}>{g}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {opcoesFiltro.temporadas.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Temporada</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {opcoesFiltro.temporadas.map(temp => (
-                      <button key={temp} onClick={() => toggleFiltroArray('temporadas', temp)} className={`px-3 py-1.5 text-xs font-bold border rounded-md transition-colors ${filtrosAvancados.temporadas.includes(temp) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 border-gray-300'}`}>{temp}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {opcoesFiltro.marcas.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Marca / Fornecedor</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {opcoesFiltro.marcas.map(marca => (
-                      <button key={marca} onClick={() => toggleFiltroArray('marcas', marca)} className={`px-3 py-1.5 text-xs font-bold border rounded-md transition-colors capitalize ${filtrosAvancados.marcas.includes(marca) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 border-gray-300'}`}>{marca}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {opcoesFiltro.tipos.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Edição</h3>
-                  <div className="space-y-2">
-                    {opcoesFiltro.tipos.map(tipo => (
-                      <label key={tipo} className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={filtrosAvancados.tipos.includes(tipo)} onChange={() => toggleFiltroArray('tipos', tipo)} className="w-4 h-4 text-green-600 rounded border-gray-300" />
-                        <span className="text-sm text-gray-700">{tipo}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {opcoesFiltro.ligas.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Ligas</h3>
-                  <div className="space-y-2">
-                    {opcoesFiltro.ligas.map(liga => (
-                      <label key={liga} className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={filtrosAvancados.ligas.includes(liga)} onChange={() => toggleFiltroArray('ligas', liga)} className="w-4 h-4 text-green-600 rounded border-gray-300" />
-                        <span className="text-sm text-gray-700 capitalize">{liga}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {opcoesFiltro.paises.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">País</h3>
-                  <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {opcoesFiltro.paises.map(pais => (
-                      <label key={pais} className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={filtrosAvancados.paises.includes(pais)} onChange={() => toggleFiltroArray('paises', pais)} className="w-4 h-4 text-green-600 rounded border-gray-300" />
-                        <span className="text-sm text-gray-700 capitalize">{pais}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-sm font-bold text-gray-900 mb-2">Tamanhos</h3>
-                <div className="flex flex-wrap gap-2">
-                  {['P', 'M', 'G', 'GG', 'XG'].map(t => (
-                    <button key={t} onClick={() => toggleFiltroArray('tamanhos', t)} className={`w-10 h-10 text-sm font-bold border rounded-md transition-colors ${filtrosAvancados.tamanhos.includes(t) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 border-gray-300'}`}>
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {opcoesFiltro.cores.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 mb-2">Cores Predominantes</h3>
-                  <div className="space-y-2">
-                    {opcoesFiltro.cores.map(cor => (
-                      <label key={cor} className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={filtrosAvancados.cores.includes(cor)} onChange={() => toggleFiltroArray('cores', cor)} className="w-4 h-4 text-green-600 rounded border-gray-300" />
-                        <span className="text-sm text-gray-700 capitalize">{cor}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-            </div>
-
-            <div className="p-4 border-t border-gray-200 mt-auto bg-gray-50 sticky bottom-0 z-10">
-              <button onClick={() => setFiltrosAvancados({precoMin: '', precoMax: '', cores: [], tamanhos: [], paises: [], ligas: [], temporadas: [], tipos: [], marcas: [], generos: [], personalizavel: false})} className="w-full py-2.5 text-sm font-bold text-gray-600 hover:text-slate-900 bg-white border border-gray-300 rounded-md shadow-sm">
-                Limpar Todos os Filtros
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProductCard({ produto, onAdd }) {
-  const [tamanho, setTamanho] = useState('M');
-  const [imgIndex, setImgIndex] = useState(0);
- 
-  const tamanhosDisponiveis = produto.tamanhos && produto.tamanhos.length > 0 ? produto.tamanhos : ['P', 'M', 'G', 'GG'];
-  const listaImagens = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
-
-  useEffect(() => {
-    if (!tamanhosDisponiveis.includes(tamanho) && tamanhosDisponiveis.length > 0) {
-      setTamanho(tamanhosDisponiveis[0]);
-    }
-  }, [produto, tamanhosDisponiveis]);
-
-  const proximaImagem = (e) => {
-    e.stopPropagation();
-    setImgIndex((prev) => (prev === listaImagens.length - 1 ? 0 : prev + 1));
-  };
-
-  const imagemAnterior = (e) => {
-    e.stopPropagation();
-    setImgIndex((prev) => (prev === 0 ? listaImagens.length - 1 : prev - 1));
-  };
-
-  return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition-all duration-200 relative group">
-      {produto.personalizavel && (
-        <span className="absolute top-3 left-3 bg-green-500 text-white text-[10px] font-extrabold px-2 py-1 rounded-full uppercase tracking-wider z-10 shadow-sm">
-          Personalizável
-        </span>
-      )}
-     
-      <div className="relative w-full h-72 bg-gray-50 flex items-center justify-center">
-        {listaImagens.length > 0 ? (
-          <img src={listaImagens[imgIndex]} className="w-full h-full object-cover transition-opacity duration-300" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
-        ) : (
-          <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
-        )}
-       
-        {listaImagens.length > 1 && (
-          <>
-            <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
-            <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
-           
-            <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
-              {listaImagens.map((_, idx) => (
-                <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === imgIndex ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="p-4 flex flex-col flex-1">
-        <div className="flex justify-between items-start mb-1">
-          <p className="text-xs text-gray-500 font-bold uppercase">{produto.marca || 'S/ Marca'}</p>
-          <p className="text-xs text-gray-400">{produto.temporada}</p>
-        </div>
-        <h3 className="text-sm font-semibold text-gray-900 leading-snug min-h-[40px]">{produto.nome_camisa}</h3>
-        <p className="text-xl font-bold text-slate-900 mt-2 mb-4">R$ {Number(produto.preco).toFixed(2)}</p>
-        <div className="mt-auto">
-          <div className="flex flex-wrap gap-1 mb-3">
-            {tamanhosDisponiveis.map(t => (
-              <button key={t} onClick={() => setTamanho(t)} className={`w-8 h-8 text-xs font-bold border rounded transition-colors ${tamanho === t ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 hover:border-gray-400'}`}>{t}</button>
-            ))}
-          </div>
-          <button onClick={() => onAdd(produto, tamanho)} className="w-full bg-slate-900 text-white py-2 rounded-lg text-sm font-medium flex justify-center items-center gap-2 hover:bg-slate-800 transition-colors"><ShoppingCart className="w-4 h-4"/> Adicionar</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+                        <input type="radio" name="frete" className="w-4 h-4 text-blue-600" checked={checkoutData.frete?.tipo === frete.tipo} onChange={()

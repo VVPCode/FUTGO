@@ -16,7 +16,10 @@ from .views import (
     PedidoUserListView,
     # --- NOVAS VIEWS ADMIN ---
     PedidoAdminListView,
-    PedidoStatusUpdateView
+    PedidoStatusUpdateView,
+    RelatorioVendasProdutoView,
+    RelatorioPerfilClientesView,
+    RelatorioFinanceiroView
 )
 
 urlpatterns = [
@@ -65,4 +68,11 @@ urlpatterns = [
     # ==========================
     path('pedidos/admin/', PedidoAdminListView.as_view(), name='pedido_admin_list'),
     path('pedidos/<str:id_pedido>/status/', PedidoStatusUpdateView.as_view(), name='pedido_status_update'),
+
+    # ==========================
+    # ROTAS DE RELATÓRIOS ADMIN
+    # ==========================
+    path('relatorios/vendas-produtos/', RelatorioVendasProdutoView.as_view(), name='relatorio_vendas_produtos'),
+    path('relatorios/perfil-clientes/', RelatorioPerfilClientesView.as_view(), name='relatorio_perfil_clientes'),
+    path('relatorios/financeiro/', RelatorioFinanceiroView.as_view(), name='relatorio_financeiro'),
 ]

@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star, BarChart3, TrendingUp, Package, Tag, Activity, ClipboardList, AlertOctagon, ArrowUpRight, ArrowDownRight, Save, CalendarDays, Users, Wallet } from 'lucide-react';
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star, BarChart3, TrendingUp, Package, Tag, Activity, ClipboardList, AlertOctagon, ArrowUpRight, ArrowDownRight, Save, CalendarDays, Users, Wallet, PieChart, DollarSign } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot, doc, setDoc, deleteDoc, addDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, setDoc, deleteDoc, addDoc, getDoc } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -66,6 +66,66 @@ const formatarIdentificador = (val) => {
   return `55${numbers}`;
 };
 
+// ==========================================
+// 🛒 FUNÇÕES DE PERSISTÊNCIA DE CARRINHO 🛒
+// ==========================================
+const saveCartToLocalStorage = (cartItems) => {
+  try {
+    localStorage.setItem('futgo_cart', JSON.stringify(cartItems));
+  } catch (error) {
+    console.error("Erro ao salvar carrinho no localStorage:", error);
+  }
+};
+
+const loadCartFromLocalStorage = () => {
+  try {
+    const savedCart = localStorage.getItem('futgo_cart');
+    return savedCart ? JSON.parse(savedCart) : [];
+  } catch (error) {
+    console.error("Erro ao carregar carrinho do localStorage:", error);
+    return [];
+  }
+};
+
+const saveCartToFirestore = async (userId, cartItems) => {
+  if (!dbFrontend || !userId) return;
+  try {
+    const cartRef = doc(dbFrontend, 'carrinhos', String(userId));
+    await setDoc(cartRef, {
+      itens: cartItems,
+      ultima_atualizacao: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Erro ao salvar carrinho no Firestore:", error);
+    // Falha silenciosa - não quebra o app
+  }
+};
+
+const loadCartFromFirestore = async (userId) => {
+  if (!dbFrontend || !userId) return null;
+  try {
+    const cartRef = doc(dbFrontend, 'carrinhos', String(userId));
+    const snapshot = await getDoc(cartRef);
+    if (snapshot.exists()) {
+      const data = snapshot.data();
+      return data.itens || [];
+    }
+  } catch (error) {
+    console.error("Erro ao carregar carrinho do Firestore:", error);
+  }
+  return null;
+};
+
+const clearCartFromFirestore = async (userId) => {
+  if (!dbFrontend || !userId) return;
+  try {
+    const cartRef = doc(dbFrontend, 'carrinhos', String(userId));
+    await deleteDoc(cartRef);
+  } catch (error) {
+    console.error("Erro ao limpar carrinho do Firestore:", error);
+  }
+};
+
 export default function App() {
   const [appUser, setAppUser] = useState(null);
   const [firebaseUser, setFirebaseUser] = useState(null);
@@ -91,6 +151,10 @@ export default function App() {
   const [authNome, setAuthNome] = useState('');
   const [authCpf, setAuthCpf] = useState('');
   const [authTelefone, setAuthTelefone] = useState('');
+  const [authDataNascimento, setAuthDataNascimento] = useState('');
+  const [authCidade, setAuthCidade] = useState('');
+  const [authEstado, setAuthEstado] = useState('');
+  const [authGenero, setAuthGenero] = useState('');
   const [authOtp, setAuthOtp] = useState('');
   const [tempUserData, setTempUserData] = useState(null);
   const [authErro, setAuthErro] = useState('');
@@ -102,7 +166,11 @@ export default function App() {
   const [editNome, setEditNome] = useState('');
   const [editTelefone, setEditTelefone] = useState('');
   const [editCpf, setEditCpf] = useState('');
- 
+  const [editDataNascimento, setEditDataNascimento] = useState('');
+  const [editCidade, setEditCidade] = useState('');
+  const [editEstado, setEditEstado] = useState('');
+  const [editGenero, setEditGenero] = useState('');
+  
   const [notificaEmail, setNotificaEmail] = useState(true);
   const [notificaWhatsapp, setNotificaWhatsapp] = useState(true);
  
@@ -166,6 +234,12 @@ export default function App() {
   const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
   const [favoritosIds, setFavoritosIds] = useState([]);
 
+  // -- NOVOS ESTADOS PARA RELATÓRIOS (BI) --
+  const [relatorioPerfilClientes, setRelatorioPerfilClientes] = useState(null);
+  const [relatorioVendasProdutos, setRelatorioVendasProdutos] = useState(null);
+  const [relatorioFinanceiro, setRelatorioFinanceiro] = useState(null);
+  const [isLoadingRelatorios, setIsLoadingRelatorios] = useState(false);
+
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
   // Carregar histórico de Entradas do Firebase
@@ -179,6 +253,47 @@ export default function App() {
         return () => unsubscribe();
     } catch (e) { console.error(e); }
   }, [isUserAdmin, dbFrontend]);
+
+  // Carregar Relatórios do Backend quando admin abre o modal
+  useEffect(() => {
+    if (!isAdminModalOpen || !isUserAdmin) return;
+
+    const carregarRelatorios = async () => {
+      setIsLoadingRelatorios(true);
+      setAdminErro('');
+
+      const fetchJson = async (url) => {
+        const response = await fetch(url, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(payload?.erro || `Falha ao carregar ${url} (${response.status})`);
+        }
+        return payload;
+      };
+
+      try {
+        const [resPerfil, resVendas, resFinanceiro] = await Promise.all([
+          fetchJson(`${API_BASE_URL}/relatorios/perfil-clientes/`),
+          fetchJson(`${API_BASE_URL}/relatorios/vendas-produtos/`),
+          fetchJson(`${API_BASE_URL}/relatorios/financeiro/`)
+        ]);
+
+        setRelatorioPerfilClientes(resPerfil);
+        setRelatorioVendasProdutos(resVendas);
+        setRelatorioFinanceiro(resFinanceiro);
+      } catch (err) {
+        console.error("Erro ao carregar relatórios:", err);
+        setRelatorioPerfilClientes(null);
+        setRelatorioVendasProdutos(null);
+        setRelatorioFinanceiro(null);
+        setAdminErro('Não foi possível carregar os relatórios. Verifique se o backend está online e se você tem permissão de administrador.');
+      } finally {
+        setIsLoadingRelatorios(false);
+      }
+    };
+
+    carregarRelatorios();
+  }, [isAdminModalOpen, isUserAdmin, appUser]);
 
   // ==========================================
   // LÓGICA DO DASHBOARD DE BI E ESTOQUE
@@ -436,6 +551,49 @@ export default function App() {
     setNotificacaoInApp({ titulo, mensagem, id: Date.now() });
   };
 
+  // ==========================================
+  // 🛒 CARREGAR CARRINHO DO FIRESTORE AO LOGIN
+  // ==========================================
+  useEffect(() => {
+    if (!appUser || appUser.email === 'admin@futgo.com') return;
+
+    const loadCart = async () => {
+      const cartFromFirestore = await loadCartFromFirestore(appUser.id_usuario);
+      if (cartFromFirestore && cartFromFirestore.length > 0) {
+        setCart(cartFromFirestore);
+        mostrarNotificacao('Carrinho Restaurado! 🛒', `Recuperamos ${cartFromFirestore.length} item(ns) do seu carrinho.`);
+      }
+    };
+
+    loadCart();
+  }, [appUser?.id_usuario]);
+
+  // ==========================================
+  // 🛒 SALVAR CARRINHO NO FIRESTORE COM DEBOUNCE
+  // ==========================================
+  useEffect(() => {
+    if (!appUser || appUser.email === 'admin@futgo.com' || cart.length === 0) return;
+
+    const debounceTimer = setTimeout(() => {
+      saveCartToFirestore(appUser.id_usuario, cart);
+    }, 500); // Debounce de 500ms
+
+    return () => clearTimeout(debounceTimer);
+  }, [cart, appUser?.id_usuario]);
+
+  // ==========================================
+  // 📦 CARRINHO NÃO AUTENTICADO (localStorage)
+  // ==========================================
+  // Ao montar o componente, carrega carrinho do localStorage para usuários não autenticados
+  useEffect(() => {
+    if (!appUser) {
+      const savedCart = loadCartFromLocalStorage();
+      if (savedCart && savedCart.length > 0) {
+        setCart(savedCart);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     fetchProdutos();
     if (firebaseAuth) {
@@ -521,9 +679,20 @@ export default function App() {
 
   const handleRegisterFormSubmit = async (e) => {
     e.preventDefault();
-    if (!authNome || !authCpf || !authTelefone) return setAuthErro('Preencha os campos.');
+    if (!authNome || !authCpf || !authTelefone || !authDataNascimento || !authCidade || !authEstado || !authGenero) {
+      return setAuthErro('Preencha todos os campos do cadastro.');
+    }
     setIsAuthLoading(true); setAuthErro(''); setAuthMensagem('');
-    setTempUserData({ nome: authNome, cpf: authCpf, telefone: authTelefone });
+    setTempUserData({
+      nome: authNome,
+      cpf: authCpf,
+      telefone: authTelefone,
+      data_nascimento: authDataNascimento,
+      cidade: authCidade,
+      estado: authEstado,
+      genero: authGenero,
+      regiao: authCidade && authEstado ? `${authCidade}/${authEstado}` : ''
+    });
     try { await triggerSendOTP(); } catch (e) {}
   };
 
@@ -535,7 +704,7 @@ export default function App() {
       let endpoint = authMode === 'login' ? '/auth/login/' : '/auth/register/';
       let payload = authMode === 'login'
         ? { identificador: identificadorFormatado, otp: authOtp }
-        : { nome: tempUserData.nome, email: authEmail.includes('@') ? authEmail : '', cpf: tempUserData.cpf, telefone: tempUserData.telefone, identificador: identificadorFormatado, otp: authOtp };
+        : { nome: tempUserData.nome, email: authEmail.includes('@') ? authEmail : '', cpf: tempUserData.cpf, telefone: tempUserData.telefone, data_nascimento: tempUserData.data_nascimento, cidade: tempUserData.cidade, estado: tempUserData.estado, genero: tempUserData.genero, regiao: tempUserData.regiao, identificador: identificadorFormatado, otp: authOtp };
      
       const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
@@ -545,11 +714,15 @@ export default function App() {
     } catch (error) { setAuthErro(error.message); } finally { setIsAuthLoading(false); }
   };
 
-  const closeAuthModal = () => { setIsAuthModalOpen(false); setAuthStep('email'); setAuthMode('login'); setAuthEmail(''); setAuthNome(''); setAuthCpf(''); setAuthTelefone(''); setAuthOtp(''); setAuthErro(''); setAuthMensagem(''); };
+  const closeAuthModal = () => { setIsAuthModalOpen(false); setAuthStep('email'); setAuthMode('login'); setAuthEmail(''); setAuthNome(''); setAuthCpf(''); setAuthTelefone(''); setAuthDataNascimento(''); setAuthCidade(''); setAuthEstado(''); setAuthGenero(''); setAuthOtp(''); setAuthErro(''); setAuthMensagem(''); setTempUserData(null); };
 
   const openProfileModal = async () => {
     setIsProfileModalOpen(true); setProfileTab('dados'); setProfileErro(''); setProfileSucesso(''); setIsConfirmingDelete(false); setIsProfileLoading(false);
     setEditNome(appUser.nome); setEditTelefone(appUser.telefone); setEditCpf(appUser.cpf || '');
+    setEditDataNascimento(appUser.data_nascimento || '');
+    setEditCidade(appUser.cidade || '');
+    setEditEstado(appUser.estado || '');
+    setEditGenero(appUser.genero || '');
     setNotificaEmail(appUser.notifica_email !== false);
     setNotificaWhatsapp(appUser.notifica_whatsapp !== false);
 
@@ -562,6 +735,10 @@ export default function App() {
         setEditNome(data.usuario.nome);
         setEditTelefone(data.usuario.telefone);
         setEditCpf(data.usuario.cpf || '');
+        setEditDataNascimento(data.usuario.data_nascimento || '');
+        setEditCidade(data.usuario.cidade || '');
+        setEditEstado(data.usuario.estado || '');
+        setEditGenero(data.usuario.genero || '');
         setNotificaEmail(data.usuario.notifica_email !== false);
         setNotificaWhatsapp(data.usuario.notifica_whatsapp !== false);
       }
@@ -573,8 +750,18 @@ export default function App() {
     e.preventDefault();
     setIsProfileLoading(true); setProfileErro(''); setProfileSucesso('');
     try {
-      const payload = { nome: editNome, telefone: editTelefone, notifica_email: notificaEmail, notifica_whatsapp: notificaWhatsapp };
+      const payload = {
+        nome: editNome,
+        telefone: editTelefone,
+        notifica_email: notificaEmail,
+        notifica_whatsapp: notificaWhatsapp,
+        data_nascimento: editDataNascimento,
+        cidade: editCidade,
+        estado: editEstado,
+        genero: editGenero || ''
+      };
       if (!appUser.cpf && editCpf) payload.cpf = editCpf;
+      if (editCidade && editEstado) payload.regiao = `${editCidade}/${editEstado}`;
      
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(()=>({}));
@@ -585,7 +772,8 @@ export default function App() {
 
   const handleLogout = async () => {
     try { if (firebaseAuth) await signOut(firebaseAuth); } catch (error) { console.error("Erro ao sair:", error); }
-    setAppUser(null); setFirebaseUser(null); setIsProfileModalOpen(false); setCart([]); setPedidosUsuario([]); setFavoritosIds([]);
+    // Mantém carrinho no localStorage para recuperação posterior
+    setAppUser(null); setFirebaseUser(null); setIsProfileModalOpen(false); setPedidosUsuario([]); setFavoritosIds([]);
   };
 
   const handleDeleteAccount = async () => {
@@ -594,7 +782,9 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/auth/user/${appUser.id_usuario}/`, { method: 'DELETE' });
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.erro || 'Erro ao apagar conta.');
+      await clearCartFromFirestore(appUser.id_usuario);
       if (firebaseAuth) await signOut(firebaseAuth);
+      setCart([]); localStorage.removeItem('futgo_cart');
       setAppUser(null); setFirebaseUser(null); setIsProfileModalOpen(false); alert("Conta apagada.");
     } catch (error) { setProfileErro(error.message); } finally { setIsProfileLoading(false); }
   };
@@ -1102,6 +1292,17 @@ export default function App() {
                 <input type="text" placeholder="Nome Completo" required value={authNome} onChange={(e) => setAuthNome(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <input type="text" placeholder="CPF (Apenas números)" required value={authCpf} onChange={(e) => setAuthCpf(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <input type="tel" placeholder="Telefone (Com DDD)" required value={authTelefone} onChange={(e) => setAuthTelefone(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                <input type="date" placeholder="Data de nascimento" required value={authDataNascimento} onChange={(e) => setAuthDataNascimento(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                <div className="grid grid-cols-2 gap-4">
+                  <select value={authGenero} required onChange={(e) => setAuthGenero(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white">
+                    <option value="">Gênero</option>
+                    <option value="Masculino">Masculino</option>
+                    <option value="Feminino">Feminino</option>
+                    <option value="Não binário">Não binário</option>
+                    <option value="Prefiro não dizer">Prefiro não dizer</option>
+                  </select>
+                  <input type="text" placeholder="Estado (UF)" required maxLength={2} value={authEstado} onChange={(e) => setAuthEstado(e.target.value.toUpperCase())} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                </div>
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium disabled:opacity-70 hover:bg-green-700 mt-2">
                   Receber código de acesso
                 </button>
@@ -1151,7 +1352,25 @@ export default function App() {
                       <div><label className="block text-sm font-medium mb-1">Telefone</label><input type="tel" required value={editTelefone} onChange={(e) => setEditTelefone(e.target.value)} className="w-full px-4 py-2 border rounded-lg" /></div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div><label className="block text-sm font-medium mb-1">Data de Nascimento</label><input type="date" value={editDataNascimento} onChange={(e) => setEditDataNascimento(e.target.value)} className="w-full px-4 py-2 border rounded-lg" /></div>
+                      <div><label className="block text-sm font-medium mb-1">Gênero</label>
+                        <select value={editGenero} onChange={(e) => setEditGenero(e.target.value)} className="w-full px-4 py-2 border rounded-lg bg-white">
+                          <option value="">Selecione o gênero</option>
+                          <option value="Masculino">Masculino</option>
+                          <option value="Feminino">Feminino</option>
+                          <option value="Não binário">Não binário</option>
+                          <option value="Prefiro não dizer">Prefiro não dizer</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div><label className="block text-sm font-medium mb-1">Cidade</label><input type="text" value={editCidade} onChange={(e) => setEditCidade(e.target.value)} className="w-full px-4 py-2 border rounded-lg" /></div>
+                      <div><label className="block text-sm font-medium mb-1">Estado (UF)</label><input type="text" maxLength={2} value={editEstado} onChange={(e) => setEditEstado(e.target.value.toUpperCase())} className="w-full px-4 py-2 border rounded-lg" /></div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div><label className="block text-sm font-medium mb-1 text-gray-500">CPF</label><input type="text" value={appUser.cpf || editCpf} disabled={!!appUser.cpf} onChange={(e) => setEditCpf(e.target.value)} className="w-full px-4 py-2 border rounded-lg disabled:bg-gray-100" /></div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div><label className="block text-sm font-medium mb-1 text-gray-500">E-mail</label><input type="email" value={appUser.email} disabled className="w-full px-4 py-2 border rounded-lg disabled:bg-gray-100" /></div>
                     </div>
 
@@ -1452,142 +1671,291 @@ export default function App() {
                   </div>
 
                   {/* SUB-ABA 1: RELATÓRIO DE ESTOQUE (Entradas vs Saídas Mensais) */}
+                  {/* SUB-ABA 1: RELATÓRIO DE VENDAS PRODUTOS */}
                   {biSubTab === 'estoque' && (
                     <div className="animate-in fade-in duration-300">
-                      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                          <div>
-                            <h4 className="font-bold text-gray-800 flex items-center gap-2"><CalendarDays className="w-5 h-5 text-indigo-500"/> Entradas e Saídas Mensais Reais</h4>
-                            <p className="text-xs text-gray-500 mt-1">Comparativo de unidades inseridas pelo Admin (Entradas) contra vendas do sistema (Saídas).</p>
-                          </div>
+                      {isLoadingRelatorios ? (
+                        <div className="text-center py-12">
+                          <p className="text-gray-500">Carregando relatório de vendas...</p>
                         </div>
-                       
-                        <div className="max-h-[400px] overflow-y-auto">
-                          <div className="overflow-x-auto w-full">
-                            <table className="w-full text-left text-sm whitespace-nowrap min-w-[600px]">
-                              <thead className="bg-white sticky top-0 shadow-sm z-10">
-                                <tr>
-                                  <th className="px-5 py-3 text-gray-600 font-bold border-b">Mês Referência</th>
-                                  <th className="px-5 py-3 text-gray-600 font-bold border-b">Produto</th>
-                                  <th className="px-5 py-3 font-bold text-center border-b text-green-600">Entradas Realizadas</th>
-                                  <th className="px-5 py-3 font-bold text-center border-b text-blue-600">Saídas (Vendas)</th>
-                                  <th className="px-5 py-3 font-bold text-center border-b text-gray-600">Estoque Hoje</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-100">
-                                {movimentacaoMensal.length === 0 ? (
-                                  <tr><td colSpan="5" className="text-center py-6 text-gray-500">Nenhuma movimentação registada ainda.</td></tr>
-                                ) : (
-                                  movimentacaoMensal.map((mov, idx) => (
-                                    <tr key={idx} className="hover:bg-indigo-50/30 transition-colors">
-                                      <td className="px-5 py-3 font-bold text-slate-800">{mov.mes}</td>
-                                      <td className="px-5 py-3 text-gray-700">{mov.nome}</td>
-                                      <td className="px-5 py-3 text-center font-mono font-bold text-green-700 bg-green-50/50">+{mov.entradas}</td>
-                                      <td className="px-5 py-3 text-center font-mono font-bold text-blue-700 bg-blue-50/50">-{mov.saidas}</td>
-                                      <td className="px-5 py-3 text-center font-mono font-bold text-gray-800">{mov.estoque_atual}</td>
+                      ) : relatorioVendasProdutos ? (
+                        <div className="space-y-6">
+                          {/* KPIs */}
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
+                              <p className="text-sm text-green-700 font-medium">Faturamento Total</p>
+                              <p className="text-2xl font-black text-green-900">R$ {relatorioVendasProdutos.metricas_principais?.faturamento_total?.toFixed(2) || '0.00'}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
+                              <p className="text-sm text-blue-700 font-medium">Unidades Vendidas</p>
+                              <p className="text-2xl font-black text-blue-900">{relatorioVendasProdutos.metricas_principais?.unidades_vendidas || 0}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
+                              <p className="text-sm text-purple-700 font-medium">Mais Vendido</p>
+                              <p className="text-sm font-bold text-purple-900 truncate">{relatorioVendasProdutos.metricas_principais?.mais_vendido || 'N/A'}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-red-50 to-red-100 p-4 rounded-lg border border-red-200">
+                              <p className="text-sm text-red-700 font-medium">Menos Vendido</p>
+                              <p className="text-sm font-bold text-red-900 truncate">{relatorioVendasProdutos.metricas_principais?.menos_vendido || 'N/A'}</p>
+                            </div>
+                          </div>
+
+                          {/* Tabela de Desempenho */}
+                          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-5 border-b border-gray-100 bg-gray-50">
+                              <h4 className="font-bold text-gray-800 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-blue-500"/> Desempenho por Produto</h4>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead className="bg-white border-b sticky top-0">
+                                  <tr className="text-gray-600">
+                                    <th className="px-5 py-3 text-left font-bold">Produto</th>
+                                    <th className="px-5 py-3 text-left font-bold">Tamanhos</th>
+                                    <th className="px-5 py-3 text-center font-bold">Vendidas</th>
+                                    <th className="px-5 py-3 text-center font-bold">Estoque</th>
+                                    <th className="px-5 py-3 text-right font-bold">Receita</th>
+                                    <th className="px-5 py-3 text-center font-bold">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {relatorioVendasProdutos.tabela_desempenho?.map((prod, idx) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                      <td className="px-5 py-3 font-medium text-gray-800">{prod.nome}</td>
+                                      <td className="px-5 py-3 text-gray-600 text-xs">{prod.tamanhos.join(', ')}</td>
+                                      <td className="px-5 py-3 text-center font-bold text-blue-600">{prod.unidades_vendidas}</td>
+                                      <td className="px-5 py-3 text-center font-bold text-gray-800">{prod.estoque_atual}</td>
+                                      <td className="px-5 py-3 text-right font-bold text-green-600">R$ {prod.receita.toFixed(2)}</td>
+                                      <td className="px-5 py-3 text-center">
+                                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                          prod.status === 'Repor logo' ? 'bg-red-100 text-red-700' :
+                                          prod.status === 'Gargalo' ? 'bg-yellow-100 text-yellow-700' :
+                                          'bg-green-100 text-green-700'
+                                        }`}>
+                                          {prod.status}
+                                        </span>
+                                      </td>
                                     </tr>
-                                  ))
-                                )}
-                              </tbody>
-                            </table>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      ) : (
+                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                      )}
                     </div>
                   )}
 
                   {/* SUB-ABA 2: PERFIL DE CLIENTE */}
                   {biSubTab === 'clientes' && (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in duration-300">
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <h4 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><Users className="w-5 h-5 text-purple-500"/> Retenção e Frequência</h4>
-                        <div className="flex flex-col gap-4">
-                           <div className="flex justify-between items-center p-4 bg-purple-50 rounded-lg">
-                              <span className="font-bold text-purple-900">Total de Pedidos Processados</span>
-                              <span className="text-2xl font-black text-purple-700">{todosPedidos.length}</span>
-                           </div>
-                           <div className="flex justify-between items-center p-4 bg-gray-50 rounded-lg border border-gray-100">
-                              <span className="font-bold text-gray-700">Média de Pedidos por Cliente</span>
-                              <span className="text-xl font-black text-gray-900">
-                                {biStats.clientesUnicos > 0 ? (todosPedidos.length / biStats.clientesUnicos).toFixed(1) : 0}
-                              </span>
-                           </div>
+                    <div className="animate-in fade-in duration-300">
+                      {isLoadingRelatorios ? (
+                        <div className="text-center py-12">
+                          <p className="text-gray-500">Carregando relatório de clientes...</p>
                         </div>
-                      </div>
+                      ) : relatorioPerfilClientes ? (
+                        <div className="space-y-6">
+                          {/* KPIs */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
+                              <p className="text-sm text-blue-700 font-medium">Total de Clientes</p>
+                              <p className="text-2xl font-black text-blue-900">{relatorioPerfilClientes.metricas_principais?.total_clientes || 0}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
+                              <p className="text-sm text-green-700 font-medium">Novos (Mês)</p>
+                              <p className="text-2xl font-black text-green-900">{relatorioPerfilClientes.metricas_principais?.novos_clientes_mes || 0}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
+                              <p className="text-sm text-purple-700 font-medium">Clientes Recorrentes</p>
+                              <p className="text-2xl font-black text-purple-900">{relatorioPerfilClientes.metricas_principais?.percentual_recorrentes || 0}%</p>
+                            </div>
+                          </div>
 
-                      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col">
-                        <h4 className="font-bold text-gray-800 mb-4">Volume por Tamanhos Mais Vendidos / Comprados</h4>
-                        <div className="flex justify-between items-end h-40 pt-4 border-b border-gray-100 gap-2 mt-auto">
-                          {['P', 'M', 'G', 'GG', 'XG'].map(tam => {
-                            const qty = biStats.tamanhosTotais[tam] || 0;
-                            const maxQty = Math.max(...Object.values(biStats.tamanhosTotais)) || 1;
-                            const heightPercent = (qty / maxQty) * 100;
-                            return (
-                              <div key={tam} className="flex flex-col items-center flex-1 group">
-                                <span className="text-xs text-gray-400 mb-2 font-bold">{qty}</span>
-                                <div className="w-full max-w-[50px] bg-indigo-100 rounded-t-md relative group-hover:bg-indigo-200 transition-colors" style={{ height: `${heightPercent}%` }}>
-                                  <div className="absolute bottom-0 w-full bg-indigo-500 rounded-t-md transition-all" style={{ height: `${heightPercent > 0 ? 100 : 0}%` }}></div>
-                                </div>
-                                <span className="text-sm font-bold text-gray-600 mt-2">{tam}</span>
+                          {/* Faixa Etária e Gênero */}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Users className="w-5 h-5 text-indigo-500"/> Distribuição por Faixa Etária</h4>
+                              <div className="space-y-3">
+                                {Object.entries(relatorioPerfilClientes.faixa_etaria || {}).map(([faixa, total]) => (
+                                  <div key={faixa}>
+                                    <div className="flex justify-between text-sm mb-1">
+                                      <span className="font-bold text-gray-700">{faixa}</span>
+                                      <span className="text-gray-600">{total} clientes</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div className="bg-indigo-500 h-2 rounded-full" style={{width: `${(total / (relatorioPerfilClientes.metricas_principais?.total_clientes || 1)) * 100}%`}}></div>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
-                            )
-                          })}
+                            </div>
+
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-pink-500"/> Distribuição por Gênero</h4>
+                              <div className="space-y-3">
+                                {Object.entries(relatorioPerfilClientes.genero || {}).map(([genero, total]) => (
+                                  <div key={genero}>
+                                    <div className="flex justify-between text-sm mb-1">
+                                      <span className="font-bold text-gray-700">{genero}</span>
+                                      <span className="text-gray-600">{total} clientes</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div className="bg-pink-500 h-2 rounded-full" style={{width: `${(total / (relatorioPerfilClientes.metricas_principais?.total_clientes || 1)) * 100}%`}}></div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Top Regiões e Hábitos */}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><MapPin className="w-5 h-5 text-green-500"/> Top 3 Regiões</h4>
+                              <div className="space-y-2">
+                                {relatorioPerfilClientes.top_regioes?.map((r, idx) => (
+                                  <div key={idx} className="flex justify-between items-center p-3 bg-green-50 rounded-lg border border-green-200">
+                                    <span className="font-bold text-gray-800">{r.regiao}</span>
+                                    <span className="bg-green-600 text-white px-3 py-1 rounded-full text-sm font-bold">{r.quantidade}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-orange-500"/> Hábitos de Compra</h4>
+                              <div className="space-y-2">
+                                {Object.entries(relatorioPerfilClientes.habitos_compra?.frequencias || {}).map(([freq, total]) => (
+                                  <div key={freq} className="flex justify-between items-center p-3 bg-orange-50 rounded-lg border border-orange-200">
+                                    <span className="font-bold text-gray-800">{freq}</span>
+                                    <span className="bg-orange-600 text-white px-3 py-1 rounded-full text-sm font-bold">{total}</span>
+                                  </div>
+                                ))}
+                                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                  <p className="text-xs text-blue-600 font-medium">Ticket Médio</p>
+                                  <p className="text-2xl font-bold text-blue-900">R$ {relatorioPerfilClientes.habitos_compra?.ticket_medio?.toFixed(2) || '0.00'}</p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                      )}
                     </div>
                   )}
 
                   {/* SUB-ABA 3: RELATÓRIO FINANCEIRO */}
                   {biSubTab === 'financeiro' && (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-300">
-                     
-                      <div className="lg:col-span-1 space-y-6">
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                          <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-blue-500"/> Distribuição de Receita por Marca</h4>
-                          <div className="space-y-4">
-                            {biStats.marcasArray.slice(0, 5).map((marca, idx) => {
-                              const percentage = ((marca.count / biStats.totalSKUs) * 100).toFixed(1);
-                              return (
-                                <div key={idx}>
-                                  <div className="flex justify-between text-sm mb-1">
-                                    <span className="font-bold text-gray-700 capitalize">{marca.nome}</span>
-                                    <span className="text-gray-500 font-mono">{percentage}%</span>
-                                  </div>
-                                  <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                                    <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${percentage}%` }}></div>
-                                  </div>
+                    <div className="animate-in fade-in duration-300">
+                      {isLoadingRelatorios ? (
+                        <div className="text-center py-12">
+                          <p className="text-gray-500">Carregando relatório financeiro...</p>
+                        </div>
+                      ) : relatorioFinanceiro ? (
+                        <div className="space-y-6">
+                          {/* KPIs Principais */}
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
+                              <p className="text-sm text-green-700 font-medium">Faturamento Total</p>
+                              <p className="text-2xl font-black text-green-900">R$ {relatorioFinanceiro.metricas_principais?.faturamento_total?.toFixed(2) || '0.00'}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-red-50 to-red-100 p-4 rounded-lg border border-red-200">
+                              <p className="text-sm text-red-700 font-medium">Custos Totais</p>
+                              <p className="text-2xl font-black text-red-900">R$ {relatorioFinanceiro.metricas_principais?.custos_totais?.toFixed(2) || '0.00'}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
+                              <p className="text-sm  text-blue-700 font-medium">Lucro Líquido</p>
+                              <p className="text-2xl font-black text-blue-900">R$ {relatorioFinanceiro.metricas_principais?.lucro_liquido?.toFixed(2) || '0.00'}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
+                              <p className="text-sm text-purple-700 font-medium">Margem de Lucro</p>
+                              <p className="text-2xl font-black text-purple-900">{relatorioFinanceiro.metricas_principais?.margem_lucro_geral || 0}%</p>
+                            </div>
+                          </div>
+
+                          {/* Divisão de Custos */}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><PieChart className="w-5 h-5 text-indigo-500"/> Divisão de Custos (%)</h4>
+                              <div className="space-y-3">
+                                <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg border border-blue-200">
+                                  <span className="font-bold text-gray-800">Produção e Estoque</span>
+                                  <span className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-bold">{relatorioFinanceiro.divisao_custos?.producao_estoque_percentual}%</span>
                                 </div>
-                              )
-                            })}
+                                <div className="flex justify-between items-center p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                                  <span className="font-bold text-gray-800">Marketing (Anúncios)</span>
+                                  <span className="bg-yellow-600 text-white px-3 py-1 rounded-full text-sm font-bold">{relatorioFinanceiro.divisao_custos?.marketing_percentual}%</span>
+                                </div>
+                                <div className="flex justify-between items-center p-3 bg-purple-50 rounded-lg border border-purple-200">
+                                  <span className="font-bold text-gray-800">Operacional</span>
+                                  <span className="bg-purple-600 text-white px-3 py-1 rounded-full text-sm font-bold">{relatorioFinanceiro.divisao_custos?.operacional_percentual}%</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><DollarSign className="w-5 h-5 text-green-500"/> Divisão de Custos (R$)</h4>
+                              <div className="space-y-3">
+                                <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg border border-blue-200">
+                                  <span className="font-bold text-gray-800">Produção</span>
+                                  <span className="font-bold text-blue-900">R$ {relatorioFinanceiro.divisao_custos?.producao_estoque_valor?.toFixed(2) || '0.00'}</span>
+                                </div>
+                                <div className="flex justify-between items-center p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                                  <span className="font-bold text-gray-800">Marketing</span>
+                                  <span className="font-bold text-yellow-900">R$ {relatorioFinanceiro.divisao_custos?.marketing_valor?.toFixed(2) || '0.00'}</span>
+                                </div>
+                                <div className="flex justify-between items-center p-3 bg-purple-50 rounded-lg border border-purple-200">
+                                  <span className="font-bold text-gray-800">Operacional</span>
+                                  <span className="font-bold text-purple-900">R$ {relatorioFinanceiro.divisao_custos?.operacional_valor?.toFixed(2) || '0.00'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Análise por Produto */}
+                          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-5 border-b border-gray-100 bg-gray-50">
+                              <h4 className="font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-500"/> Análise de Lucratividade por Produto</h4>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead className="bg-white border-b sticky top-0">
+                                  <tr className="text-gray-600">
+                                    <th className="px-5 py-3 text-left font-bold">Produto</th>
+                                    <th className="px-5 py-3 text-right font-bold">Receita</th>
+                                    <th className="px-5 py-3 text-right font-bold">Custo</th>
+                                    <th className="px-5 py-3 text-right font-bold">Lucro</th>
+                                    <th className="px-5 py-3 text-right font-bold">Margem %</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                  {relatorioFinanceiro.analise_produtos?.map((prod, idx) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                      <td className="px-5 py-3 font-medium text-gray-800">{prod.nome}</td>
+                                      <td className="px-5 py-3 text-right font-bold text-green-600">R$ {prod.receita.toFixed(2)}</td>
+                                      <td className="px-5 py-3 text-right font-bold text-red-600">R$ {prod.custo.toFixed(2)}</td>
+                                      <td className="px-5 py-3 text-right font-bold text-blue-600">R$ {prod.lucro.toFixed(2)}</td>
+                                      <td className="px-5 py-3 text-right">
+                                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                          prod.margem >= 40 ? 'bg-green-100 text-green-700' :
+                                          prod.margem >= 30 ? 'bg-yellow-100 text-yellow-700' :
+                                          'bg-red-100 text-red-700'
+                                        }`}>
+                                          {prod.margem}%
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         </div>
-                      </div>
-
-                      <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                          <h4 className="font-bold text-gray-800 flex items-center gap-2"><Star className="w-5 h-5 text-yellow-500 fill-yellow-500"/> Produtos Premium (Maior Ticket)</h4>
-                        </div>
-                        <div className="overflow-x-auto w-full">
-                          <table className="w-full text-left text-sm whitespace-nowrap min-w-[500px]">
-                            <thead className="bg-white text-gray-500 border-b">
-                              <tr><th className="px-5 py-3 font-bold">Produto</th><th className="px-5 py-3 font-bold">Marca</th><th className="px-5 py-3 font-bold text-right">Preço de Venda</th></tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {biStats.topProdutosCaros.map(p => (
-                                <tr key={p.id} className="hover:bg-gray-50">
-                                  <td className="px-5 py-3 font-medium text-slate-800 flex items-center gap-3">
-                                    <img src={formatImageUrl(p.imagem)} className="w-8 h-8 rounded object-contain p-0.5 border bg-white" />
-                                    <span className="truncate max-w-[200px]">{p.nome_camisa}</span>
-                                  </td>
-                                  <td className="px-5 py-3 text-gray-600 capitalize font-bold">{p.marca || '-'}</td>
-                                  <td className="px-5 py-3 text-right font-black text-green-600 text-lg">R$ {Number(p.preco).toFixed(2)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
+                      ) : (
+                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                      )}
                     </div>
                   )}
 
@@ -2202,7 +2570,7 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-              )}
+               )}
 
             </div>
 

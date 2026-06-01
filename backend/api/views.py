@@ -3,8 +3,9 @@ import os
 import time
 import random
 import uuid
+import json
 import stripe
-from datetime import datetime
+from datetime import datetime, timezone
 from django.conf import settings
 from django.core.mail import send_mail, EmailMessage
 from django.core.files.storage import default_storage
@@ -32,6 +33,43 @@ def is_admin(request):
         return user_data.get('email') == 'admin@futgo.com' or user_data.get('is_admin') == True
     except:
         return False
+
+
+def parse_imagens_field(value):
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if item]
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if item]
+        except ValueError:
+            pass
+
+        if ',' in raw:
+            return [part.strip() for part in raw.split(',') if part.strip()]
+
+        return [raw]
+
+    return []
+
+
+def normalize_image_payload(dados):
+    imagem_recebida = dados.get('imagem', '')
+    imagens_lista = parse_imagens_field(dados.get('imagens', []))
+
+    if imagem_recebida and not imagens_lista:
+        imagens_lista = [imagem_recebida]
+
+    if imagens_lista and not imagem_recebida:
+        imagem_recebida = imagens_lista[0]
+
+    return imagem_recebida, imagens_lista
 
 # ==========================================
 # UPLOAD DE MÚLTIPLAS IMAGENS
@@ -95,6 +133,10 @@ class SocialLoginView(APIView):
                     "email": email, 
                     "cpf": "", 
                     "telefone": "", 
+                    "data_nascimento": "",
+                    "cidade": "",
+                    "estado": "",
+                    "regiao": "",
                     "data_cadastro": datetime.utcnow().isoformat() + "Z",
                     "notifica_email": True,
                     "notifica_whatsapp": True
@@ -213,12 +255,22 @@ class RegisterView(APIView):
             if len(check_email) > 0: return Response({"erro": "E-mail já registado."}, status=409)
 
             id_usuario = int(time.time())
+            data_nascimento = dados.get('data_nascimento', '').strip()
+            cidade = dados.get('cidade', '').strip()
+            estado = dados.get('estado', '').strip()
+            regiao = dados.get('regiao', '').strip() or (f"{cidade}/{estado}" if cidade and estado else "")
+
             novo_usuario = {
                 "id_usuario": id_usuario, 
                 "nome": dados.get('nome', '').strip(), 
                 "email": email_limpo, 
                 "cpf": cpf_limpo, 
-                "telefone": tel_limpo, 
+                "telefone": tel_limpo,
+                "data_nascimento": data_nascimento,
+                "cidade": cidade,
+                "estado": estado,
+                "regiao": regiao,
+                "genero": dados.get('genero', '').strip(),
                 "data_cadastro": datetime.utcnow().isoformat() + "Z",
                 "notifica_email": True,
                 "notifica_whatsapp": True
@@ -250,7 +302,23 @@ class UserDetailView(APIView):
                 update_data['telefone'] = re.sub(r'\D', '', str(request.data.get('telefone', '')))
             if request.data.get('cpf'): 
                 update_data['cpf'] = re.sub(r'\D', '', str(request.data.get('cpf', '')))
+            if request.data.get('data_nascimento') is not None:
+                update_data['data_nascimento'] = request.data.get('data_nascimento').strip()
+            if request.data.get('cidade') is not None:
+                update_data['cidade'] = request.data.get('cidade').strip()
+            if request.data.get('estado') is not None:
+                update_data['estado'] = request.data.get('estado').strip()
+            if request.data.get('regiao') is not None:
+                update_data['regiao'] = request.data.get('regiao').strip()
+            if request.data.get('genero') is not None:
+                update_data['genero'] = request.data.get('genero').strip()
             
+            if 'cidade' in update_data or 'estado' in update_data:
+                cidade_final = update_data.get('cidade') or user_ref.get().to_dict().get('cidade', '')
+                estado_final = update_data.get('estado') or user_ref.get().to_dict().get('estado', '')
+                if cidade_final and estado_final:
+                    update_data['regiao'] = f"{cidade_final}/{estado_final}"
+
             # Preferências de notificação
             if 'notifica_email' in request.data: 
                 update_data['notifica_email'] = request.data.get('notifica_email')
@@ -306,17 +374,8 @@ class ProdutoListView(APIView):
             dados = request.data
             id_prod = str(uuid.uuid4())
             
-            # ==========================================
-            # CORREÇÃO AQUI: Aceitar a imagem vinda do Mobile
-            # ==========================================
-            imagem_recebida = dados.get('imagem', '')
-            imagens_lista = dados.get('imagens', [])
-            
-            # Se vier uma imagem do mobile, colocamo-la também na lista para o site React não quebrar
-            if imagem_recebida and not imagens_lista:
-                imagens_lista = [imagem_recebida]
-                
-            imagem_principal = imagem_recebida if imagem_recebida else (imagens_lista[0] if imagens_lista else "")
+            imagem_recebida, imagens_lista = normalize_image_payload(dados)
+            imagem_principal = imagem_recebida
             
             novo_prod = {
                 "id": id_prod, 
@@ -348,9 +407,15 @@ class ProdutoDetailView(APIView):
             if not prod_ref.get().exists: return Response({"erro": "Não encontrado."}, status=404)
             
             update_data = request.data.copy()
-            if 'imagens' in update_data and len(update_data['imagens']) > 0:
-                update_data['imagem'] = update_data['imagens'][0]
-                
+            imagem_recebida, imagens_lista = normalize_image_payload(update_data)
+
+            if imagens_lista:
+                update_data['imagens'] = imagens_lista
+                update_data['imagem'] = imagens_lista[0]
+            elif imagem_recebida:
+                update_data['imagens'] = [imagem_recebida]
+                update_data['imagem'] = imagem_recebida
+
             prod_ref.update(update_data)
             return Response({"mensagem": "Atualizado!", "produto": prod_ref.get().to_dict()}, status=200)
         except Exception as e: return Response({"erro": str(e)}, status=500)
@@ -685,3 +750,234 @@ class RecomendacoesView(APIView):
             
         except Exception as e:
             return Response({"erro": str(e)}, status=500)
+
+class RelatorioVendasProdutoView(APIView):
+    def get(self, request):
+        try:
+            if not is_admin(request):
+                return Response({'erro': 'Acesso negado.'}, status=403)
+
+            produtos_docs = db.collection('produtos').get()
+            pedidos_docs = db.collection('pedidos').get()
+            produtos = [doc.to_dict() for doc in produtos_docs]
+
+            vendas = {}
+            receita_por_produto = {}
+            for pedido_doc in pedidos_docs:
+                pedido = pedido_doc.to_dict()
+                if pedido.get('status') == 'Cancelado':
+                    continue
+                for item in pedido.get('itens', []):
+                    prod_id = str(item.get('id') or item.get('produto') or '')
+                    quantidade = int(item.get('quantidade', 0) or 0)
+                    preco = float(item.get('preco', 0.0) or 0.0)
+                    vendas[prod_id] = vendas.get(prod_id, 0) + quantidade
+                    receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + preco * quantidade
+
+            tabela_desempenho = []
+            for produto in produtos:
+                prod_id = str(produto.get('id', ''))
+                unidades_vendidas = vendas.get(prod_id, 0)
+                receita = round(receita_por_produto.get(prod_id, 0.0), 2)
+                estoque_atual = int(produto.get('estoque', 0) or 0)
+                status = 'Sustentável'
+                if estoque_atual <= 0:
+                    status = 'Repor logo'
+                elif estoque_atual <= 10:
+                    status = 'Gargalo'
+                elif estoque_atual <= 20:
+                    status = 'Atenção'
+
+                tabela_desempenho.append({
+                    'nome': produto.get('nome_camisa', 'Produto'),
+                    'tamanhos': produto.get('tamanhos', []) or [],
+                    'unidades_vendidas': unidades_vendidas,
+                    'estoque_atual': estoque_atual,
+                    'receita': receita,
+                    'status': status,
+                })
+
+            tabela_desempenho.sort(key=lambda item: item['unidades_vendidas'], reverse=True)
+            ordered_vendas = [item for item in tabela_desempenho if item['unidades_vendidas'] > 0] + [item for item in tabela_desempenho if item['unidades_vendidas'] == 0]
+            total_vendas = sum(vendas.values())
+            faturamento_total = round(sum(receita_por_produto.values()), 2)
+            mais_vendido = ordered_vendas[0]['nome'] if ordered_vendas else 'N/A'
+            menos_vendido = ordered_vendas[-1]['nome'] if ordered_vendas else 'N/A'
+
+            return Response({
+                'metricas_principais': {
+                    'faturamento_total': faturamento_total,
+                    'unidades_vendidas': total_vendas,
+                    'mais_vendido': mais_vendido,
+                    'menos_vendido': menos_vendido,
+                },
+                'tabela_desempenho': ordered_vendas,
+            }, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+class RelatorioPerfilClientesView(APIView):
+    def get(self, request):
+        try:
+            if not is_admin(request):
+                return Response({'erro': 'Acesso negado.'}, status=403)
+
+            usuarios_docs = db.collection('usuarios').get()
+            pedidos_docs = db.collection('pedidos').get()
+            usuarios = [doc.to_dict() for doc in usuarios_docs]
+            pedidos = [doc.to_dict() for doc in pedidos_docs]
+
+            usuarios_reais = [u for u in usuarios if not u.get('is_admin')]
+            total_clientes = len(usuarios_reais)
+            hoje = datetime.now(timezone.utc)
+            inicio_do_mes = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            novos_clientes_mes = 0
+
+            for usuario in usuarios_reais:
+                data_cadastro = usuario.get('data_cadastro')
+                if data_cadastro:
+                    try:
+                        data = datetime.fromisoformat(data_cadastro.replace('Z', '+00:00'))
+                        if data >= inicio_do_mes:
+                            novos_clientes_mes += 1
+                    except Exception:
+                        pass
+
+            pedidos_por_cliente = {}
+            for pedido in pedidos:
+                cliente_id = int(pedido.get('id_usuario') or 0)
+                if cliente_id <= 0:
+                    continue
+                pedidos_por_cliente[cliente_id] = pedidos_por_cliente.get(cliente_id, 0) + 1
+
+            clientes_recorrentes = sum(1 for count in pedidos_por_cliente.values() if count > 1)
+            percentual_recorrentes = round((clientes_recorrentes / total_clientes) * 100, 1) if total_clientes else 0
+
+            faixa_etaria = {'18-24': 0, '25-34': 0, '35-44': 0, '45-54': 0, '55+': 0, 'Não informado': 0}
+            genero = {}
+            regioes = {}
+
+            for usuario in usuarios_reais:
+                data_nascimento = usuario.get('data_nascimento') or usuario.get('dataNascimento')
+                if data_nascimento:
+                    try:
+                        data = datetime.fromisoformat(data_nascimento.replace('Z', '+00:00'))
+                        idade = hoje.year - data.year - ((hoje.month, hoje.day) < (data.month, data.day))
+                        if idade < 25:
+                            faixa_etaria['18-24'] += 1
+                        elif idade < 35:
+                            faixa_etaria['25-34'] += 1
+                        elif idade < 45:
+                            faixa_etaria['35-44'] += 1
+                        elif idade < 55:
+                            faixa_etaria['45-54'] += 1
+                        else:
+                            faixa_etaria['55+'] += 1
+                    except Exception:
+                        faixa_etaria['Não informado'] += 1
+                else:
+                    faixa_etaria['Não informado'] += 1
+
+                genero_nome = usuario.get('genero') or 'Não informado'
+                genero[genero_nome] = genero.get(genero_nome, 0) + 1
+                local = usuario.get('cidade') or usuario.get('estado') or usuario.get('regiao') or 'Não informado'
+                regioes[local] = regioes.get(local, 0) + 1
+
+            top_regioes = sorted([{'regiao': k, 'quantidade': v} for k, v in regioes.items()], key=lambda x: x['quantidade'], reverse=True)[:3]
+            frequencias = {'1 pedido': 0, '2-3 pedidos': 0, '4+ pedidos': 0}
+
+            for quantidade in pedidos_por_cliente.values():
+                if quantidade == 1:
+                    frequencias['1 pedido'] += 1
+                elif quantidade <= 3:
+                    frequencias['2-3 pedidos'] += 1
+                else:
+                    frequencias['4+ pedidos'] += 1
+
+            total_pedidos = sum(pedidos_por_cliente.values())
+            ticket_medio = 0.0
+            if total_pedidos > 0:
+                faturamento_total = sum(float(p.get('total', 0.0) or 0.0) for p in pedidos)
+                ticket_medio = round(faturamento_total / total_pedidos, 2)
+
+            return Response({
+                'metricas_principais': {
+                    'total_clientes': total_clientes,
+                    'novos_clientes_mes': novos_clientes_mes,
+                    'percentual_recorrentes': percentual_recorrentes,
+                },
+                'faixa_etaria': faixa_etaria,
+                'genero': genero,
+                'top_regioes': top_regioes,
+                'habitos_compra': {
+                    'frequencias': frequencias,
+                    'ticket_medio': ticket_medio,
+                },
+            }, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+class RelatorioFinanceiroView(APIView):
+    def get(self, request):
+        try:
+            if not is_admin(request):
+                return Response({'erro': 'Acesso negado.'}, status=403)
+
+            pedidos_docs = db.collection('pedidos').get()
+            produtos_docs = db.collection('produtos').get()
+            produtos = {str(doc.id): doc.to_dict() for doc in produtos_docs}
+
+            pedidos = [doc.to_dict() for doc in pedidos_docs if doc.to_dict().get('status') != 'Cancelado']
+            faturamento_total = round(sum(float(p.get('total', 0.0) or 0.0) for p in pedidos), 2)
+            custos_totais = round(faturamento_total * 0.6, 2)
+            lucro_liquido = round(faturamento_total - custos_totais, 2)
+            margem_liquida = round((lucro_liquido / faturamento_total) * 100, 1) if faturamento_total else 0
+
+            divisao_custos = {
+                'producao_estoque_percentual': 55,
+                'marketing_percentual': 25,
+                'operacional_percentual': 20,
+                'producao_estoque_valor': round(faturamento_total * 0.55, 2),
+                'marketing_valor': round(faturamento_total * 0.25, 2),
+                'operacional_valor': round(faturamento_total * 0.20, 2),
+            }
+
+            receita_por_produto = {}
+            custo_por_produto = {}
+
+            for pedido in pedidos:
+                for item in pedido.get('itens', []):
+                    prod_id = str(item.get('id') or item.get('produto') or '')
+                    quantidade = int(item.get('quantidade', 0) or 0)
+                    preco = float(item.get('preco', 0.0) or 0.0)
+                    receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + preco * quantidade
+                    custo_por_produto[prod_id] = custo_por_produto.get(prod_id, 0.0) + preco * quantidade * 0.6
+
+            analise_produtos = []
+            for prod_id, receita in receita_por_produto.items():
+                custo = round(custo_por_produto.get(prod_id, 0.0), 2)
+                lucro = round(receita - custo, 2)
+                margem = round((lucro / receita) * 100, 1) if receita else 0
+                produto = produtos.get(prod_id, {})
+                analise_produtos.append({
+                    'nome': produto.get('nome_camisa', 'Produto'),
+                    'receita': round(receita, 2),
+                    'custo': custo,
+                    'lucro': lucro,
+                    'margem': margem,
+                })
+
+            analise_produtos.sort(key=lambda x: x['receita'], reverse=True)
+
+            return Response({
+                'metricas_principais': {
+                    'faturamento_total': faturamento_total,
+                    'custos_totais': custos_totais,
+                    'lucro_liquido': lucro_liquido,
+                    'margem_lucro_geral': margem_liquida,
+                },
+                'divisao_custos': divisao_custos,
+                'analise_produtos': analise_produtos,
+            }, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)

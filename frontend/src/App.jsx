@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star, BarChart3, TrendingUp, Package, Tag, Activity, ClipboardList, AlertOctagon, ArrowUpRight, ArrowDownRight, Save, CalendarDays, Users, Wallet, PieChart, DollarSign } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import ProductCard from './components/ProductCard';
+import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, query, where, onSnapshot, doc, setDoc, deleteDoc, addDoc, getDoc } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
@@ -233,6 +234,7 @@ export default function App() {
   const [notificacaoInApp, setNotificacaoInApp] = useState(null);
   const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
   const [favoritosIds, setFavoritosIds] = useState([]);
+  const [usandoLocalStorage, setUsandoLocalStorage] = useState(false);
 
   // -- NOVOS ESTADOS PARA RELATÓRIOS (BI) --
   const [relatorioPerfilClientes, setRelatorioPerfilClientes] = useState(null);
@@ -499,43 +501,103 @@ export default function App() {
   }, [appUser]);
 
   useEffect(() => {
-    if (!firebaseUser || !dbFrontend) {
-      setFavoritosIds([]);
-      return;
-    }
-   
-    const favRef = collection(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos');
-    const unsubscribe = onSnapshot(favRef,
-      (snapshot) => {
-        const ids = snapshot.docs.map(doc => doc.id);
-        setFavoritosIds(ids);
-      },
-      (error) => {
-        console.error("Erro ao procurar favoritos:", error);
-      }
-    );
+    // Tentar carregar favoritos do Firestore
+    if (firebaseUser && dbFrontend) {
+      const favRef = collection(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos');
+      console.log("[FAVORITOS] Sincronizando favoritos Firestore para uid:", firebaseUser.uid);
 
-    return () => unsubscribe();
+      const unsubscribe = onSnapshot(favRef,
+        (snapshot) => {
+          const ids = snapshot.docs.map(doc => doc.id);
+          console.log("[FAVORITOS] ✓ Firestore sincronizado. Total:", ids.length);
+          setFavoritosIds(ids);
+          setUsandoLocalStorage(false);
+        },
+        (error) => {
+          console.warn("[FAVORITOS] ⚠️ Firestore indisponível, usando localStorage:", error.code);
+          // Fallback para localStorage
+          const savedFavs = localStorage.getItem('futgo_favoritos');
+          const favs = savedFavs ? JSON.parse(savedFavs) : [];
+          setFavoritosIds(favs);
+          setUsandoLocalStorage(true);
+        }
+      );
+
+      return () => unsubscribe();
+    } else {
+      // Se não tem firebaseUser, carregar do localStorage
+      console.log("[FAVORITOS] Usando localStorage (sem firebaseUser)");
+      const savedFavs = localStorage.getItem('futgo_favoritos');
+      const favs = savedFavs ? JSON.parse(savedFavs) : [];
+      setFavoritosIds(favs);
+      setUsandoLocalStorage(true);
+    }
   }, [firebaseUser]);
 
   const toggleFavorito = async (produto) => {
-    if (!firebaseUser) {
-      setIsAuthModalOpen(true);
+    const prodIdStr = produto.id?.toString();
+    if (!prodIdStr) {
+      console.warn("[FAVORITOS] ID do produto inválido");
       return;
     }
-    const prodIdStr = produto.id?.toString();
-    if (!prodIdStr) return;
+
+    const isFav = favoritosIds.includes(prodIdStr);
+    console.log("[FAVORITOS] toggleFavorito. Storage:", usandoLocalStorage ? 'localStorage' : 'Firestore', "Estado:", isFav ? 'é favorito' : 'não é favorito');
 
     try {
+      // Se usando localStorage, atualizar diretamente
+      if (usandoLocalStorage) {
+        let favs = JSON.parse(localStorage.getItem('futgo_favoritos') || '[]');
+        if (isFav) {
+          favs = favs.filter(id => id !== prodIdStr);
+          console.log("[FAVORITOS] ✓ Removido do localStorage");
+          mostrarNotificacao('Removido ❌', `${produto.nome_camisa} foi removido da sua lista de desejos.`);
+        } else {
+          favs.push(prodIdStr);
+          console.log("[FAVORITOS] ✓ Adicionado ao localStorage");
+          mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
+        }
+        localStorage.setItem('futgo_favoritos', JSON.stringify(favs));
+        setFavoritosIds(favs);
+        return;
+      }
+
+      // Se tem Firestore, usar Firestore
+      if (!firebaseUser || !dbFrontend) {
+        console.warn("[FAVORITOS] Firestore indisponível, usando localStorage como fallback");
+        toggleFavorito(produto); // Recursivamente chamar com localStorage
+        return;
+      }
+
       const docRef = doc(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos', prodIdStr);
-      if (favoritosIds.includes(prodIdStr)) {
+
+      if (isFav) {
+        console.log("[FAVORITOS] Removendo do Firestore...");
         await deleteDoc(docRef);
+        console.log("[FAVORITOS] ✓ Removido do Firestore");
+        mostrarNotificacao('Removido ❌', `${produto.nome_camisa} foi removido da sua lista de desejos.`);
       } else {
+        console.log("[FAVORITOS] Adicionando ao Firestore...");
         await setDoc(docRef, { adicionado_em: new Date().toISOString() });
+        console.log("[FAVORITOS] ✓ Adicionado ao Firestore");
         mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
       }
     } catch (error) {
-      console.error("Erro ao favoritar:", error);
+      console.error("[FAVORITOS] Erro:", error.code, error.message);
+      console.log("[FAVORITOS] Salvando no localStorage como fallback...");
+
+      // Fallback para localStorage se Firestore falhar
+      let favs = JSON.parse(localStorage.getItem('futgo_favoritos') || '[]');
+      if (isFav) {
+        favs = favs.filter(id => id !== prodIdStr);
+      } else {
+        favs.push(prodIdStr);
+      }
+      localStorage.setItem('futgo_favoritos', JSON.stringify(favs));
+      setFavoritosIds(favs);
+      setUsandoLocalStorage(true);
+
+      mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado (local).`);
     }
   };
 
@@ -595,25 +657,53 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    console.log("[FIREBASE INIT] firebaseAuth:", !!firebaseAuth, "dbFrontend:", !!dbFrontend);
     fetchProdutos();
-    if (firebaseAuth) {
-      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
-        setFirebaseUser(user);
-        if (user && !appUser && !isLoggingInRef.current) {
-          try {
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            const token = await user.getIdToken();
-            const fallbackEmail = user.email || user.providerData[0]?.email || "";
-            if (!fallbackEmail) return;
-            const fallbackName = user.displayName || user.providerData[0]?.displayName || "Utilizador";
 
-            const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
-            if (res.ok) { const data = await res.json(); setAppUser(data.usuario); }
-          } catch (e) { console.error("Falha ao recuperar sessão:", e); }
-        }
+    if (!firebaseAuth) {
+      console.error("[FIREBASE INIT] ❌ ERRO CRÍTICO: firebaseAuth não está inicializado!");
+      console.log("[FIREBASE INIT] firebaseConfig:", {
+        apiKey: firebaseConfig.apiKey ? '✓' : '✗',
+        authDomain: firebaseConfig.authDomain ? '✓' : '✗',
+        projectId: firebaseConfig.projectId ? '✓' : '✗'
       });
-      return () => unsubscribe();
+      return;
     }
+
+    console.log("[FIREBASE INIT] ✓ firebaseAuth inicializado com sucesso");
+
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      console.log("[FIREBASE AUTH] Estado alterado:", user ? `Usuário: ${user.isAnonymous ? 'Anônimo' : user.email} (uid: ${user.uid.slice(0,8)}...)` : 'Nenhum usuário');
+      setFirebaseUser(user);
+
+      // Se não há usuário, tente fazer login anônimo
+      if (!user) {
+        try {
+          console.log("[FIREBASE AUTH] Tentando fazer login anônimo...");
+          const result = await signInAnonymously(firebaseAuth);
+          console.log("[FIREBASE AUTH] ✓ Login anônimo bem-sucedido. UID:", result.user.uid.slice(0,8) + "...");
+        } catch (error) {
+          console.error("[FIREBASE AUTH] ❌ Erro ao fazer login anônimo:", error.code, error.message);
+        }
+        return;
+      }
+
+      // Se é usuário social (não anônimo), sincronizar com Django
+      if (user && !user.isAnonymous && !appUser && !isLoggingInRef.current) {
+        try {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const token = await user.getIdToken();
+          const fallbackEmail = user.email || user.providerData[0]?.email || "";
+          if (!fallbackEmail) return;
+          const fallbackName = user.displayName || user.providerData[0]?.displayName || "Utilizador";
+
+          const res = await fetch(`${API_BASE_URL}/auth/social/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, fallbackEmail, fallbackName }) });
+          if (res.ok) { const data = await res.json(); setAppUser(data.usuario); }
+        } catch (e) { console.error("Falha ao recuperar sessão:", e); }
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const fetchProdutos = async () => {
@@ -679,6 +769,7 @@ export default function App() {
 
   const handleRegisterFormSubmit = async (e) => {
     e.preventDefault();
+    console.log('handleRegisterFormSubmit values:', { authNome, authCpf, authTelefone, authDataNascimento, authCidade, authEstado, authGenero, authEmail });
     if (!authNome || !authCpf || !authTelefone || !authDataNascimento || !authCidade || !authEstado || !authGenero) {
       return setAuthErro('Preencha todos os campos do cadastro.');
     }
@@ -1303,6 +1394,7 @@ export default function App() {
                   </select>
                   <input type="text" placeholder="Estado (UF)" required maxLength={2} value={authEstado} onChange={(e) => setAuthEstado(e.target.value.toUpperCase())} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 </div>
+                <input type="text" placeholder="Cidade" required value={authCidade} onChange={(e) => setAuthCidade(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
                 <button type="submit" disabled={isAuthLoading} className="w-full bg-green-600 text-white py-2.5 rounded-lg font-medium disabled:opacity-70 hover:bg-green-700 mt-2">
                   Receber código de acesso
                 </button>
@@ -2586,94 +2678,4 @@ export default function App() {
   );
 }
 
-function ProductCard({ produto, onAdd, isFavorito, onToggleFavorito }) {
-  const [tamanho, setTamanho] = useState('M');
-  const [imgIndex, setImgIndex] = useState(0);
- 
-  const tamanhosDisponiveis = produto.tamanhos && produto.tamanhos.length > 0 ? produto.tamanhos : ['P', 'M', 'G', 'GG'];
-  const listaImagens = produto.imagens && produto.imagens.length > 0 ? produto.imagens : (produto.imagem ? [produto.imagem] : []);
-
-  const esgotado = produto.estoque !== undefined && produto.estoque <= 0;
-
-  useEffect(() => {
-    if (!tamanhosDisponiveis.includes(tamanho) && tamanhosDisponiveis.length > 0) {
-      setTamanho(tamanhosDisponiveis[0]);
-    }
-  }, [produto, tamanhosDisponiveis]);
-
-  const proximaImagem = (e) => {
-    e.stopPropagation();
-    setImgIndex((prev) => (prev === listaImagens.length - 1 ? 0 : prev + 1));
-  };
-
-  const imagemAnterior = (e) => {
-    e.stopPropagation();
-    setImgIndex((prev) => (prev === 0 ? listaImagens.length - 1 : prev - 1));
-  };
-
-  return (
-    <div className={`bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition-all duration-200 relative group ${esgotado ? 'opacity-70 grayscale-[30%]' : ''}`}>
-     
-      {esgotado ? (
-        <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white text-lg font-black px-6 py-2 rounded shadow-lg z-30 uppercase tracking-widest transform -rotate-12 border-2 border-white">
-          Esgotado
-        </span>
-      ) : produto.personalizavel ? (
-        <span className="absolute top-3 left-3 bg-green-500 text-white text-[10px] font-extrabold px-2 py-1 rounded-full uppercase tracking-wider z-10 shadow-sm">
-          Personalizável
-        </span>
-      ) : null}
-     
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleFavorito();
-        }}
-        className="absolute top-3 right-3 z-20 p-2 rounded-full bg-white bg-opacity-80 hover:bg-opacity-100 shadow-sm transition-all"
-        title="Adicionar à Lista de Desejos"
-      >
-        <Star className={`w-5 h-5 transition-colors ${isFavorito ? 'fill-yellow-400 text-yellow-500' : 'text-gray-400 hover:text-yellow-400'}`} />
-      </button>
-     
-      <div className="relative w-full h-72 bg-white flex items-center justify-center p-4">
-        {listaImagens.length > 0 ? (
-          <img src={formatImageUrl(listaImagens[imgIndex])} className="w-full h-full object-contain transition-opacity duration-300 drop-shadow-sm" onError={(e) => e.target.src = "https://placehold.co/400x500/cccccc/ffffff?text=Sem+Imagem"} />
-        ) : (
-          <div className="flex flex-col items-center text-gray-400"><ImageIcon className="w-10 h-10 mb-2"/><span>Sem Foto</span></div>
-        )}
-       
-        {listaImagens.length > 1 && (
-          <>
-            <button onClick={imagemAnterior} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronLeft className="w-5 h-5"/></button>
-            <button onClick={proximaImagem} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white bg-opacity-80 p-1.5 rounded-full text-gray-800 hover:bg-opacity-100 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><ChevronRight className="w-5 h-5"/></button>
-           
-            <div className="absolute bottom-3 left-0 w-full flex justify-center gap-1.5">
-              {listaImagens.map((_, idx) => (
-                <div key={idx} className={`w-2 h-2 rounded-full transition-colors shadow-sm ${idx === imgIndex ? 'bg-green-500 scale-110' : 'bg-gray-300 bg-opacity-80'}`} />
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="p-4 flex flex-col flex-1 border-t border-gray-50">
-        <div className="flex justify-between items-start mb-1">
-          <p className="text-xs text-gray-500 font-bold uppercase">{produto.marca || 'S/ Marca'}</p>
-          <p className="text-xs text-gray-400">{produto.temporada}</p>
-        </div>
-        <h3 className="text-sm font-semibold text-gray-900 leading-snug min-h-[40px] line-clamp-2">{produto.nome_camisa}</h3>
-        <p className="text-xl font-bold text-slate-900 mt-2 mb-4">R$ {Number(produto.preco).toFixed(2)}</p>
-        <div className="mt-auto">
-          <div className="flex flex-wrap gap-1 mb-3">
-            {tamanhosDisponiveis.map(t => (
-              <button disabled={esgotado} key={t} onClick={() => setTamanho(t)} className={`w-8 h-8 text-xs font-bold border rounded transition-colors ${tamanho === t ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 hover:border-gray-400'} disabled:opacity-50`}>{t}</button>
-            ))}
-          </div>
-          <button disabled={esgotado} onClick={() => onAdd(produto, tamanho)} className="w-full bg-slate-900 text-white py-2 rounded-lg text-sm font-medium flex justify-center items-center gap-2 hover:bg-slate-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
-            <ShoppingCart className="w-4 h-4"/> {esgotado ? 'Sem Estoque' : 'Adicionar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// `ProductCard` moved to a separate file: frontend/src/components/ProductCard.jsx

@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star, BarChart3, TrendingUp, Package, Tag, Activity, ClipboardList, AlertOctagon, ArrowUpRight, ArrowDownRight, Save, CalendarDays, Users, Wallet, PieChart, DollarSign } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import ProductCard from './components/ProductCard';
-import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot, doc, setDoc, deleteDoc, addDoc, getDoc } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getFirestore, collection, query, where, onSnapshot, addDoc, getDoc } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -234,7 +234,6 @@ export default function App() {
   const [notificacaoInApp, setNotificacaoInApp] = useState(null);
   const [recomendacoesCarrinho, setRecomendacoesCarrinho] = useState([]);
   const [favoritosIds, setFavoritosIds] = useState([]);
-  const [usandoLocalStorage, setUsandoLocalStorage] = useState(false);
 
   // -- NOVOS ESTADOS PARA RELATÓRIOS (BI) --
   const [relatorioPerfilClientes, setRelatorioPerfilClientes] = useState(null);
@@ -501,40 +500,38 @@ export default function App() {
   }, [appUser]);
 
   useEffect(() => {
-    // Tentar carregar favoritos do Firestore
-    if (firebaseUser && dbFrontend) {
-      const favRef = collection(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos');
-      console.log("[FAVORITOS] Sincronizando favoritos Firestore para uid:", firebaseUser.uid);
-
-      const unsubscribe = onSnapshot(favRef,
-        (snapshot) => {
-          const ids = snapshot.docs.map(doc => doc.id);
-          console.log("[FAVORITOS] ✓ Firestore sincronizado. Total:", ids.length);
-          setFavoritosIds(ids);
-          setUsandoLocalStorage(false);
-        },
-        (error) => {
-          console.warn("[FAVORITOS] ⚠️ Firestore indisponível, usando localStorage:", error.code);
-          // Fallback para localStorage
-          const savedFavs = localStorage.getItem('futgo_favoritos');
-          const favs = savedFavs ? JSON.parse(savedFavs) : [];
-          setFavoritosIds(favs);
-          setUsandoLocalStorage(true);
-        }
-      );
-
-      return () => unsubscribe();
+    // Carregar favoritos do backend quando usuário faz login
+    if (appUser) {
+      console.log("[FAVORITOS] Carregando favoritos do backend para usuário:", appUser.id_usuario);
+      fetch(`${API_BASE_URL}/favoritos/${appUser.id_usuario}/`, {
+        headers: { 'X-User-ID': String(appUser.id_usuario) }
+      })
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error(`Erro ${res.status}`);
+        })
+        .then(data => {
+          console.log("[FAVORITOS] ✓ Carregados do backend. Total:", data.favoritos.length, data.favoritos);
+          setFavoritosIds(data.favoritos);
+        })
+        .catch(error => {
+          console.error("[FAVORITOS] Erro ao carregar:", error.message);
+          setFavoritosIds([]);
+        });
     } else {
-      // Se não tem firebaseUser, carregar do localStorage
-      console.log("[FAVORITOS] Usando localStorage (sem firebaseUser)");
-      const savedFavs = localStorage.getItem('futgo_favoritos');
-      const favs = savedFavs ? JSON.parse(savedFavs) : [];
-      setFavoritosIds(favs);
-      setUsandoLocalStorage(true);
+      console.log("[FAVORITOS] Nenhum usuário logado. Limpando favoritos.");
+      setFavoritosIds([]);
     }
-  }, [firebaseUser]);
+  }, [appUser?.id_usuario]);
 
   const toggleFavorito = async (produto) => {
+    // Se usuário não está logado, pedir para fazer login
+    if (!appUser) {
+      console.log("[FAVORITOS] Usuário não logado. Abrindo modal de autenticação.");
+      setIsAuthModalOpen(true);
+      return;
+    }
+
     const prodIdStr = produto.id?.toString();
     if (!prodIdStr) {
       console.warn("[FAVORITOS] ID do produto inválido");
@@ -542,62 +539,47 @@ export default function App() {
     }
 
     const isFav = favoritosIds.includes(prodIdStr);
-    console.log("[FAVORITOS] toggleFavorito. Storage:", usandoLocalStorage ? 'localStorage' : 'Firestore', "Estado:", isFav ? 'é favorito' : 'não é favorito');
+    console.log("[FAVORITOS] toggleFavorito. Usuário:", appUser.id_usuario, "Produto:", prodIdStr, "Estado:", isFav ? 'é favorito' : 'não é favorito');
 
     try {
-      // Se usando localStorage, atualizar diretamente
-      if (usandoLocalStorage) {
-        let favs = JSON.parse(localStorage.getItem('futgo_favoritos') || '[]');
-        if (isFav) {
-          favs = favs.filter(id => id !== prodIdStr);
-          console.log("[FAVORITOS] ✓ Removido do localStorage");
+      if (isFav) {
+        // Remover favorito
+        console.log("[FAVORITOS] Removendo do backend...");
+        const res = await fetch(`${API_BASE_URL}/favoritos/${appUser.id_usuario}/?id_produto=${prodIdStr}`, {
+          method: 'DELETE',
+          headers: { 'X-User-ID': String(appUser.id_usuario) }
+        });
+
+        if (res.ok) {
+          console.log("[FAVORITOS] ✓ Removido com sucesso");
+          setFavoritosIds(favoritosIds.filter(id => id !== prodIdStr));
           mostrarNotificacao('Removido ❌', `${produto.nome_camisa} foi removido da sua lista de desejos.`);
         } else {
-          favs.push(prodIdStr);
-          console.log("[FAVORITOS] ✓ Adicionado ao localStorage");
-          mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
+          throw new Error(`Erro ${res.status}`);
         }
-        localStorage.setItem('futgo_favoritos', JSON.stringify(favs));
-        setFavoritosIds(favs);
-        return;
-      }
-
-      // Se tem Firestore, usar Firestore
-      if (!firebaseUser || !dbFrontend) {
-        console.warn("[FAVORITOS] Firestore indisponível, usando localStorage como fallback");
-        toggleFavorito(produto); // Recursivamente chamar com localStorage
-        return;
-      }
-
-      const docRef = doc(dbFrontend, 'artifacts', appId, 'users', firebaseUser.uid, 'favoritos', prodIdStr);
-
-      if (isFav) {
-        console.log("[FAVORITOS] Removendo do Firestore...");
-        await deleteDoc(docRef);
-        console.log("[FAVORITOS] ✓ Removido do Firestore");
-        mostrarNotificacao('Removido ❌', `${produto.nome_camisa} foi removido da sua lista de desejos.`);
       } else {
-        console.log("[FAVORITOS] Adicionando ao Firestore...");
-        await setDoc(docRef, { adicionado_em: new Date().toISOString() });
-        console.log("[FAVORITOS] ✓ Adicionado ao Firestore");
-        mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
+        // Adicionar favorito
+        console.log("[FAVORITOS] Adicionando ao backend...");
+        const res = await fetch(`${API_BASE_URL}/favoritos/${appUser.id_usuario}/`, {
+          method: 'POST',
+          headers: {
+            'X-User-ID': String(appUser.id_usuario),
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ id_produto: prodIdStr })
+        });
+
+        if (res.ok) {
+          console.log("[FAVORITOS] ✓ Adicionado com sucesso");
+          setFavoritosIds([...favoritosIds, prodIdStr]);
+          mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado na sua lista de desejos.`);
+        } else {
+          throw new Error(`Erro ${res.status}`);
+        }
       }
     } catch (error) {
-      console.error("[FAVORITOS] Erro:", error.code, error.message);
-      console.log("[FAVORITOS] Salvando no localStorage como fallback...");
-
-      // Fallback para localStorage se Firestore falhar
-      let favs = JSON.parse(localStorage.getItem('futgo_favoritos') || '[]');
-      if (isFav) {
-        favs = favs.filter(id => id !== prodIdStr);
-      } else {
-        favs.push(prodIdStr);
-      }
-      localStorage.setItem('futgo_favoritos', JSON.stringify(favs));
-      setFavoritosIds(favs);
-      setUsandoLocalStorage(true);
-
-      mostrarNotificacao('Favoritado! ⭐', `${produto.nome_camisa} foi guardado (local).`);
+      console.error("[FAVORITOS] Erro:", error.message);
+      mostrarNotificacao('Erro ❌', 'Não foi possível atualizar favorito.');
     }
   };
 

@@ -53,15 +53,81 @@ class UsuarioModel:
         
         return novo_usuario
 
+class ListaDesejosModel:
+    @staticmethod
+    def adicionar_favorito(db_client, id_usuario: str, id_produto: str) -> dict:
+        """
+        Adiciona um produto à lista de desejos do usuário.
+        Armazena em: usuarios/{id_usuario}/lista_desejos/{id_produto}
+        """
+        try:
+            doc_ref = db_client.collection('usuarios').document(str(id_usuario)).collection('lista_desejos').document(str(id_produto))
+            doc_ref.set({
+                'id_produto': str(id_produto),
+                'data_adicionado': datetime.now(),
+                'adicionado_em': datetime.now().isoformat()
+            })
+            return {'sucesso': True, 'mensagem': 'Produto adicionado aos favoritos'}
+        except Exception as e:
+            raise Exception(f"Erro ao adicionar favorito: {str(e)}")
+
+    @staticmethod
+    def remover_favorito(db_client, id_usuario: str, id_produto: str) -> dict:
+        """
+        Remove um produto da lista de desejos do usuário.
+        """
+        try:
+            doc_ref = db_client.collection('usuarios').document(str(id_usuario)).collection('lista_desejos').document(str(id_produto))
+            doc_ref.delete()
+            return {'sucesso': True, 'mensagem': 'Produto removido dos favoritos'}
+        except Exception as e:
+            raise Exception(f"Erro ao remover favorito: {str(e)}")
+
+    @staticmethod
+    def listar_favoritos(db_client, id_usuario: str) -> list:
+        """
+        Lista todos os produtos na lista de desejos do usuário.
+        Retorna IDs dos produtos.
+        """
+        try:
+            docs = db_client.collection('usuarios').document(str(id_usuario)).collection('lista_desejos').stream()
+            return [doc.id for doc in docs]
+        except Exception as e:
+            raise Exception(f"Erro ao listar favoritos: {str(e)}")
+
+    @staticmethod
+    def obter_lista_completa(db_client, id_usuario: str) -> list:
+        """
+        Retorna a lista completa de desejos com detalhes dos produtos.
+        """
+        try:
+            favoritos_docs = db_client.collection('usuarios').document(str(id_usuario)).collection('lista_desejos').stream()
+            produtos_ref = db_client.collection('produtos')
+
+            lista_completa = []
+            for fav_doc in favoritos_docs:
+                id_produto = fav_doc.id
+                prod_doc = produtos_ref.document(id_produto).get()
+
+                if prod_doc.exists:
+                    produto_data = prod_doc.to_dict()
+                    produto_data['id'] = id_produto
+                    lista_completa.append(produto_data)
+
+            return lista_completa
+        except Exception as e:
+            raise Exception(f"Erro ao obter lista completa: {str(e)}")
+
+
 class ProdutoModel:
     @staticmethod
     def listar_produtos(db_client, id_categoria=None):
         """Busca produtos no Firestore (Requisito 8.1 - Catálogo)"""
         produtos_ref = db_client.collection('produtos')
-        
+
         if id_categoria and id_categoria != "Todas":
             query = produtos_ref.where('id_categoria', '==', id_categoria).stream()
         else:
             query = produtos_ref.stream()
-            
+
         return [doc.to_dict() | {'id': doc.id} for doc in query]

@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 load_dotenv() 
 
 from .firebase_config import db
+from .models import ListaDesejosModel
 
 def is_admin(request):
     try:
@@ -979,5 +980,85 @@ class RelatorioFinanceiroView(APIView):
                 'divisao_custos': divisao_custos,
                 'analise_produtos': analise_produtos,
             }, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+
+# ==========================================
+# LISTA DE DESEJOS / FAVORITOS
+# ==========================================
+class ListaDesejosView(APIView):
+    """
+    Gerencia a lista de desejos dos usuários.
+    GET: Listar IDs dos produtos favoritados
+    POST: Adicionar produto aos favoritos
+    DELETE: Remover produto dos favoritos
+    """
+
+    def get(self, request, id_usuario):
+        """Lista IDs de todos os produtos na lista de desejos do usuário"""
+        try:
+            id_usuario = request.headers.get('X-User-ID', id_usuario)
+            if not id_usuario:
+                return Response({'erro': 'Usuário não identificado'}, status=401)
+
+            favoritos = ListaDesejosModel.listar_favoritos(db, id_usuario)
+            return Response({'favoritos': favoritos}, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+    def post(self, request, id_usuario):
+        """Adiciona um produto à lista de desejos"""
+        try:
+            id_usuario = request.headers.get('X-User-ID', id_usuario)
+            if not id_usuario:
+                return Response({'erro': 'Usuário não identificado'}, status=401)
+
+            id_produto = request.data.get('id_produto')
+            if not id_produto:
+                return Response({'erro': 'ID do produto é obrigatório'}, status=400)
+
+            resultado = ListaDesejosModel.adicionar_favorito(db, id_usuario, id_produto)
+            return Response(resultado, status=201)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+    def delete(self, request, id_usuario, id_produto=None):
+        """Remove um produto da lista de desejos"""
+        try:
+            id_usuario = request.headers.get('X-User-ID', id_usuario)
+            if not id_usuario:
+                return Response({'erro': 'Usuário não identificado'}, status=401)
+
+            # Suportar ambos os formatos:
+            # DELETE /api/favoritos/{id_usuario}/{id_produto}/
+            # DELETE /api/favoritos/{id_usuario}/?id_produto=xxx
+            if not id_produto:
+                id_produto = request.query_params.get('id_produto')
+
+            if not id_produto:
+                return Response({'erro': 'ID do produto é obrigatório'}, status=400)
+
+            resultado = ListaDesejosModel.remover_favorito(db, id_usuario, id_produto)
+            return Response(resultado, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+
+class ListaDesejosCompletoView(APIView):
+    """
+    Retorna a lista completa de desejos com detalhes dos produtos.
+    GET: Retorna lista com informações completas dos produtos
+    """
+
+    def get(self, request, id_usuario):
+        """Retorna lista completa com detalhes dos produtos favoritados"""
+        try:
+            id_usuario = request.headers.get('X-User-ID', id_usuario)
+            if not id_usuario:
+                return Response({'erro': 'Usuário não identificado'}, status=401)
+
+            lista_completa = ListaDesejosModel.obter_lista_completa(db, id_usuario)
+            return Response({'favoritos': lista_completa}, status=200)
         except Exception as e:
             return Response({'erro': str(e)}, status=500)

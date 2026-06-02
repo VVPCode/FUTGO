@@ -1203,23 +1203,31 @@ export default function App() {
       const anterior = Number(estoqueAtualPorTamanho[tamanho] ?? 0);
       const delta = qtd - anterior;
       if (delta > 0) {
+        const novaEntrada = {
+          produto_id: String(idProduto),
+          nome_camisa: prodAtual.nome_camisa,
+          tamanho,
+          quantidade: delta,
+          data: new Date().toISOString(),
+        };
         try {
           const entradaRes = await fetch(`${API_BASE_URL}/estoque/entrada/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-User-ID': String(appUser.id_usuario) },
-            body: JSON.stringify({
-              produto_id: idProduto,
-              nome_camisa: prodAtual.nome_camisa,
-              tamanho,
-              quantidade: delta,
-              app_id: appId,
-            })
+            body: JSON.stringify({ ...novaEntrada, app_id: appId })
           });
-          if (!entradaRes.ok) {
+          if (entradaRes.ok) {
+            // Atualiza o estado local imediatamente para o relatório refletir a entrada
+            // (o onSnapshot do Firestore sincroniza em seguida; esta linha evita depender de permissões do client SDK)
+            setEntradasEstoque(prev => [...prev, novaEntrada]);
+          } else {
             const errData = await entradaRes.json().catch(() => ({}));
-            console.error('Falha ao registrar entrada de estoque:', errData.erro);
+            const motivo = errData.erro || `HTTP ${entradaRes.status}`;
+            mostrarNotificacao('Aviso', `Estoque atualizado, mas a entrada não foi registrada no histórico: ${motivo}`);
+            console.error('Falha ao registrar entrada de estoque:', motivo);
           }
         } catch (err) {
+          mostrarNotificacao('Aviso', 'Estoque atualizado, mas a entrada não foi registrada no histórico (erro de rede).');
           console.error('Erro de rede ao registrar entrada de estoque:', err);
         }
       }

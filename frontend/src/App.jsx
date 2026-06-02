@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ShoppingCart, Search, X, Plus, Minus, Trash2, User, Settings, LogOut, AlertTriangle, Loader2, Mail, MapPin, MapPinned, ShieldAlert, Edit, PlusCircle, Image as ImageIcon, Filter, Menu, Check, ChevronLeft, ChevronRight, UploadCloud, Truck, Box, CreditCard, CheckCircle, BellRing, ExternalLink, QrCode, Barcode, ShieldCheck, Sparkles, MessageCircle, Star, BarChart3, TrendingUp, Package, Tag, Activity, ClipboardList, AlertOctagon, ArrowUpRight, ArrowDownRight, Save, CalendarDays, Users, Wallet, PieChart, DollarSign } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import ProductCard from './components/ProductCard';
-import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot, addDoc, getDoc } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
+import { getFirestore, collection, query, where, onSnapshot, addDoc, getDoc, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 const CATEGORIAS = ["Todas", "Nacional", "Europa", "Seleções"];
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -199,7 +199,8 @@ export default function App() {
   // ESTADOS DO PRODUTO
   const [prodNome, setProdNome] = useState('');
   const [prodPreco, setProdPreco] = useState('');
-  const [prodEstoque, setProdEstoque] = useState(50);
+  const [prodEstoque, setProdEstoque] = useState(50); // legado — usado como soma total
+  const [prodEstoquePorTamanho, setProdEstoquePorTamanho] = useState({ P: 0, M: 0, G: 0, GG: 0 });
   const [prodCategoria, setProdCategoria] = useState('Nacional');
   const [prodImagem, setProdImagem] = useState('');
   const [prodImagensSalvas, setProdImagensSalvas] = useState([]);
@@ -220,8 +221,10 @@ export default function App() {
   const [entradasEstoque, setEntradasEstoque] = useState([]); // Histórico real de entradas
 
   // ESTADOS PARA EDIÇÃO RÁPIDA DE ESTOQUE
-  const [editingStockId, setEditingStockId] = useState(null);
+  const [editingStockId, setEditingStockId] = useState(null); // legado — mantido para compat
   const [tempStockValue, setTempStockValue] = useState('');
+  const [expandedStockId, setExpandedStockId] = useState(null); // novo — linha expansível por tamanho
+  const [tempSizeValues, setTempSizeValues] = useState({}); // { tamanho: valor } para edição
 
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState(1);
@@ -240,6 +243,26 @@ export default function App() {
   const [relatorioVendasProdutos, setRelatorioVendasProdutos] = useState(null);
   const [relatorioFinanceiro, setRelatorioFinanceiro] = useState(null);
   const [isLoadingRelatorios, setIsLoadingRelatorios] = useState(false);
+  const [erroRelatorios, setErroRelatorios] = useState({ vendas: null, clientes: null, financeiro: null });
+  const [refreshRelatoriosTrigger, setRefreshRelatoriosTrigger] = useState(0);
+  const recarregarRelatorios = () => setRefreshRelatoriosTrigger(n => n + 1);
+
+  // Helpers de data compartilhados
+  const _hoje = new Date();
+  const _30diasAtras = new Date(_hoje); _30diasAtras.setDate(_hoje.getDate() - 30);
+  const _toISO = (d) => d.toISOString().slice(0, 10);
+
+  // Filtros de data — Relatório de Estoque (movimentação Firebase)
+  const [filtroEstoqueDataInicio, setFiltroEstoqueDataInicio] = useState(_toISO(_30diasAtras));
+  const [filtroEstoqueDataFim, setFiltroEstoqueDataFim] = useState(_toISO(_hoje));
+
+  // Filtros de data — Relatórios de backend (Vendas, Clientes, Financeiro)
+  const [filtroVendasInicio, setFiltroVendasInicio] = useState(_toISO(_30diasAtras));
+  const [filtroVendasFim, setFiltroVendasFim] = useState(_toISO(_hoje));
+  const [filtroClientesInicio, setFiltroClientesInicio] = useState(_toISO(_30diasAtras));
+  const [filtroClientesFim, setFiltroClientesFim] = useState(_toISO(_hoje));
+  const [filtroFinanceiroInicio, setFiltroFinanceiroInicio] = useState(_toISO(_30diasAtras));
+  const [filtroFinanceiroFim, setFiltroFinanceiroFim] = useState(_toISO(_hoje));
 
   const isUserAdmin = appUser?.email === 'admin@futgo.com' || appUser?.is_admin === true;
 
@@ -259,42 +282,45 @@ export default function App() {
   useEffect(() => {
     if (!isAdminModalOpen || !isUserAdmin) return;
 
+    const fetchJson = async (url) => {
+      const response = await fetch(url, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.erro || `Falha ao carregar (${response.status})`);
+      return payload;
+    };
+
     const carregarRelatorios = async () => {
       setIsLoadingRelatorios(true);
       setAdminErro('');
+      setErroRelatorios({ vendas: null, clientes: null, financeiro: null });
 
-      const fetchJson = async (url) => {
-        const response = await fetch(url, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } });
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) {
-          throw new Error(payload?.erro || `Falha ao carregar ${url} (${response.status})`);
-        }
-        return payload;
-      };
+      const qVendas = `data_inicio=${filtroVendasInicio}&data_fim=${filtroVendasFim}`;
+      const qClientes = `data_inicio=${filtroClientesInicio}&data_fim=${filtroClientesFim}`;
+      const qFinanceiro = `data_inicio=${filtroFinanceiroInicio}&data_fim=${filtroFinanceiroFim}`;
 
-      try {
-        const [resPerfil, resVendas, resFinanceiro] = await Promise.all([
-          fetchJson(`${API_BASE_URL}/relatorios/perfil-clientes/`),
-          fetchJson(`${API_BASE_URL}/relatorios/vendas-produtos/`),
-          fetchJson(`${API_BASE_URL}/relatorios/financeiro/`)
-        ]);
+      const [resPerfil, resVendas, resFinanceiro] = await Promise.allSettled([
+        fetchJson(`${API_BASE_URL}/relatorios/perfil-clientes/?${qClientes}`),
+        fetchJson(`${API_BASE_URL}/relatorios/vendas-produtos/?${qVendas}`),
+        fetchJson(`${API_BASE_URL}/relatorios/financeiro/?${qFinanceiro}`)
+      ]);
 
-        setRelatorioPerfilClientes(resPerfil);
-        setRelatorioVendasProdutos(resVendas);
-        setRelatorioFinanceiro(resFinanceiro);
-      } catch (err) {
-        console.error("Erro ao carregar relatórios:", err);
-        setRelatorioPerfilClientes(null);
-        setRelatorioVendasProdutos(null);
-        setRelatorioFinanceiro(null);
-        setAdminErro('Não foi possível carregar os relatórios. Verifique se o backend está online e se você tem permissão de administrador.');
-      } finally {
-        setIsLoadingRelatorios(false);
-      }
+      setRelatorioPerfilClientes(resPerfil.status === 'fulfilled' ? resPerfil.value : null);
+      setRelatorioVendasProdutos(resVendas.status === 'fulfilled' ? resVendas.value : null);
+      setRelatorioFinanceiro(resFinanceiro.status === 'fulfilled' ? resFinanceiro.value : null);
+      setErroRelatorios({
+        clientes: resPerfil.status === 'rejected' ? resPerfil.reason?.message : null,
+        vendas: resVendas.status === 'rejected' ? resVendas.reason?.message : null,
+        financeiro: resFinanceiro.status === 'rejected' ? resFinanceiro.reason?.message : null,
+      });
+      setIsLoadingRelatorios(false);
     };
 
     carregarRelatorios();
-  }, [isAdminModalOpen, isUserAdmin, appUser]);
+  }, [isAdminModalOpen, isUserAdmin, appUser,
+      filtroVendasInicio, filtroVendasFim,
+      filtroClientesInicio, filtroClientesFim,
+      filtroFinanceiroInicio, filtroFinanceiroFim,
+      refreshRelatoriosTrigger]);
 
   // ==========================================
   // LÓGICA DO DASHBOARD DE BI E ESTOQUE
@@ -360,18 +386,69 @@ export default function App() {
     return Object.values(movs).sort((a, b) => b.mes_raw.localeCompare(a.mes_raw));
   }, [todosPedidos, entradasEstoque, produtos]);
 
+  // Relatório de Estoque filtrado por período — por produto E tamanho
+  const relatorioEstoquePeriodo = useMemo(() => {
+    const inicio = filtroEstoqueDataInicio ? new Date(filtroEstoqueDataInicio + 'T00:00:00') : null;
+    const fim = filtroEstoqueDataFim ? new Date(filtroEstoqueDataFim + 'T23:59:59') : null;
+    // chave: `prodId|tamanho`
+    const porChave = {};
+
+    const getOuCriar = (id, tamanho, nome) => {
+      const chave = `${id}|${tamanho || 'geral'}`;
+      if (!porChave[chave]) porChave[chave] = { id, tamanho: tamanho || '—', nome, entradas: 0, saidas: 0 };
+      return porChave[chave];
+    };
+
+    // Entradas no período
+    entradasEstoque.forEach(entrada => {
+      const d = new Date(entrada.data);
+      if ((inicio && d < inicio) || (fim && d > fim)) return;
+      const registro = getOuCriar(entrada.produto_id, entrada.tamanho, entrada.nome_camisa);
+      registro.entradas += Number(entrada.quantidade) || 0;
+    });
+
+    // Saídas no período (dos pedidos) — pedido.itens tem campo `tamanho`
+    todosPedidos.forEach(pedido => {
+      if (pedido.status === 'Cancelado') return;
+      const d = new Date(pedido.data_pedido || 0);
+      if ((inicio && d < inicio) || (fim && d > fim)) return;
+      (pedido.itens || []).forEach(item => {
+        const id = item.id || item.produto;
+        const nome = item.nome_camisa || item.nome || 'Produto';
+        const tamanho = item.tamanho || '—';
+        const registro = getOuCriar(id, tamanho, nome);
+        registro.saidas += Number(item.quantidade) || 0;
+      });
+    });
+
+    // Adiciona estoque atual por tamanho
+    return Object.values(porChave).map(item => {
+      const prod = produtos.find(p => p.id === item.id);
+      const ept = prod?.estoque_por_tamanho || {};
+      const estoqueAtualTamanho = ept[item.tamanho] !== undefined ? ept[item.tamanho] : (prod?.estoque ?? 0);
+      return { ...item, estoque_atual: estoqueAtualTamanho };
+    }).sort((a, b) => {
+      if (a.nome !== b.nome) return a.nome.localeCompare(b.nome);
+      return a.tamanho.localeCompare(b.tamanho);
+    });
+  }, [entradasEstoque, todosPedidos, produtos, filtroEstoqueDataInicio, filtroEstoqueDataFim]);
+
   // 3. Gera o Relatório de Estoque DEFINITIVO
   const relatorioEstoque = useMemo(() => {
     return produtos.map(p => {
       const saidas = vendasPorProduto[p.id] || 0;
-      const estoqueAtual = p.estoque !== undefined ? p.estoque : 50;
-     
+      // Usa estoque_por_tamanho como fonte de verdade; fallback para estoque legado
+      const estoquePorTamanho = p.estoque_por_tamanho || null;
+      const estoqueAtual = estoquePorTamanho
+        ? Object.values(estoquePorTamanho).reduce((a, b) => a + (Number(b) || 0), 0)
+        : (p.estoque !== undefined ? p.estoque : 0);
+
       let status = 'Normal';
       if (estoqueAtual <= 0) status = 'Esgotado';
       else if (estoqueAtual <= 10) status = 'Crítico';
       else if (estoqueAtual <= 20) status = 'Baixo';
 
-      return { ...p, saidas, estoqueAtual, status };
+      return { ...p, saidas, estoqueAtual, estoquePorTamanho, status };
     }).sort((a, b) => a.estoqueAtual - b.estoqueAtual);
   }, [produtos, vendasPorProduto]);
 
@@ -1044,10 +1121,12 @@ export default function App() {
       if(urlsFinais.length === 0 && prodImagem) urlsFinais = [prodImagem];
       const headers = { 'Content-Type': 'application/json', 'X-User-ID': String(appUser.id_usuario) };
      
+      const estoqueTotal = Object.values(prodEstoquePorTamanho).reduce((a, b) => a + (Number(b) || 0), 0);
       const payload = {
          nome_camisa: prodNome,
          preco: parseFloat(prodPreco),
-         estoque: parseInt(prodEstoque) || 0,
+         estoque: estoqueTotal,
+         estoque_por_tamanho: prodEstoquePorTamanho,
          categoria: prodCategoria,
          imagem: urlsFinais[0] || prodImagem,
          imagens: urlsFinais,
@@ -1075,16 +1154,17 @@ export default function App() {
         const novoProdutoCriado = data.produto || data;
         setProdutos([...produtos, novoProdutoCriado]);
        
-        // Log Initial Stock Entry
-        if (dbFrontend && parseInt(prodEstoque) > 0) {
-            try {
-                await addDoc(collection(dbFrontend, 'artifacts', appId, 'public', 'data', 'entradas_estoque'), {
-                    produto_id: novoProdutoCriado.id,
-                    nome_camisa: prodNome,
-                    quantidade: parseInt(prodEstoque),
-                    data: new Date().toISOString()
-                });
-            } catch(err) { console.error("Falha ao salvar estoque inicial no BI", err); }
+        // Log Initial Stock Entry — um registro por tamanho, via backend
+        if (estoqueTotal > 0) {
+            for (const [tam, qtd] of Object.entries(prodEstoquePorTamanho)) {
+                if (Number(qtd) > 0) {
+                    fetch(`${API_BASE_URL}/estoque/entrada/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-User-ID': String(appUser.id_usuario) },
+                        body: JSON.stringify({ produto_id: novoProdutoCriado.id, nome_camisa: prodNome, tamanho: tam, quantidade: Number(qtd), app_id: appId })
+                    }).catch(err => console.error('Falha ao registrar estoque inicial:', err));
+                }
+            }
         }
       }
       setAdminTab('lista');
@@ -1092,15 +1172,70 @@ export default function App() {
   };
 
   // ==========================================
-  // SALVAR ESTOQUE RÁPIDO E SALVAR NO FIREBASE BI
+  // SALVAR ESTOQUE POR TAMANHO
   // ==========================================
-  const handleQuickStockSave = async (idProduto) => {
-    const novoValor = parseInt(tempStockValue);
-    if (isNaN(novoValor) || novoValor < 0) return;
-   
+  const handleSizeStockSave = async (idProduto, tamanho, novoValor) => {
+    const qtd = parseInt(novoValor);
+    if (isNaN(qtd) || qtd < 0) return;
+
     const prodAtual = produtos.find(p => p.id === idProduto);
     if (!prodAtual) return;
 
+    // Monta o novo objeto por tamanho
+    const estoqueAtualPorTamanho = prodAtual.estoque_por_tamanho || {};
+    const novoEstoquePorTamanho = { ...estoqueAtualPorTamanho, [tamanho]: qtd };
+    const novoTotal = Object.values(novoEstoquePorTamanho).reduce((a, b) => a + (Number(b) || 0), 0);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/produtos/${idProduto}/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-ID': String(appUser.id_usuario) },
+        body: JSON.stringify({ ...prodAtual, estoque_por_tamanho: novoEstoquePorTamanho, estoque: novoTotal })
+      });
+      if (!res.ok) throw new Error('Falha ao atualizar.');
+
+      setProdutos(produtos.map(p => p.id === idProduto
+        ? { ...p, estoque_por_tamanho: novoEstoquePorTamanho, estoque: novoTotal }
+        : p
+      ));
+
+      // Registra entrada no histórico via backend (confiável — usa Firebase Admin SDK)
+      const anterior = Number(estoqueAtualPorTamanho[tamanho] ?? 0);
+      const delta = qtd - anterior;
+      if (delta > 0) {
+        try {
+          const entradaRes = await fetch(`${API_BASE_URL}/estoque/entrada/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-User-ID': String(appUser.id_usuario) },
+            body: JSON.stringify({
+              produto_id: idProduto,
+              nome_camisa: prodAtual.nome_camisa,
+              tamanho,
+              quantidade: delta,
+              app_id: appId,
+            })
+          });
+          if (!entradaRes.ok) {
+            const errData = await entradaRes.json().catch(() => ({}));
+            console.error('Falha ao registrar entrada de estoque:', errData.erro);
+          }
+        } catch (err) {
+          console.error('Erro de rede ao registrar entrada de estoque:', err);
+        }
+      }
+
+      mostrarNotificacao('Estoque Atualizado', `${prodAtual.nome_camisa} (${tamanho}): ${qtd} unidades.`);
+    } catch (error) {
+      alert('Erro ao atualizar o estoque. O servidor pode estar indisponível.');
+    }
+  };
+
+  // Legado — mantido por compatibilidade (não usado na nova UI)
+  const handleQuickStockSave = async (idProduto) => {
+    const novoValor = parseInt(tempStockValue);
+    if (isNaN(novoValor) || novoValor < 0) return;
+    const prodAtual = produtos.find(p => p.id === idProduto);
+    if (!prodAtual) return;
     try {
       const res = await fetch(`${API_BASE_URL}/produtos/${idProduto}/`, {
         method: 'PUT',
@@ -1108,28 +1243,10 @@ export default function App() {
         body: JSON.stringify({ ...prodAtual, estoque: novoValor })
       });
       if (res.ok) {
-         setProdutos(produtos.map(p => p.id === idProduto ? {...p, estoque: novoValor} : p));
-         setEditingStockId(null);
-         mostrarNotificacao('Estoque Atualizado', `A base de dados foi atualizada com sucesso para ${novoValor} unidades.`);
-         
-         // SALVA ENTRADA NO HISTÓRICO SE O VALOR AUMENTOU
-         const delta = novoValor - (prodAtual.estoque !== undefined ? prodAtual.estoque : 50);
-         if (delta > 0 && dbFrontend) {
-             try {
-                await addDoc(collection(dbFrontend, 'artifacts', appId, 'public', 'data', 'entradas_estoque'), {
-                    produto_id: idProduto,
-                    nome_camisa: prodAtual.nome_camisa,
-                    quantidade: delta,
-                    data: new Date().toISOString()
-                });
-             } catch(err) { console.error("Falha ao salvar entrada no BI", err); }
-         }
-      } else {
-         throw new Error("A requisição foi bloqueada pela API.");
+        setProdutos(produtos.map(p => p.id === idProduto ? {...p, estoque: novoValor} : p));
+        setEditingStockId(null);
       }
-    } catch (error) {
-      alert("Erro ao atualizar o estoque. O servidor pode estar indisponível.");
-    }
+    } catch (error) { alert('Erro ao atualizar o estoque.'); }
   };
 
   const handleAdminDeleteProduct = async (id) => {
@@ -1655,58 +1772,90 @@ export default function App() {
 
                   <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div className="overflow-x-auto w-full">
-                      <table className="w-full text-left text-sm whitespace-nowrap min-w-[600px]">
+                      <table className="w-full text-left text-sm min-w-[600px]">
                         <thead className="bg-slate-50 border-b border-gray-200">
                           <tr>
                             <th className="px-5 py-4 font-bold text-gray-700">Produto</th>
-                            <th className="px-5 py-4 font-bold text-gray-700 text-center text-blue-600">Saídas (Total)</th>
-                            <th className="px-5 py-4 font-bold text-gray-700 text-center">Estoque Atual</th>
-                            <th className="px-5 py-4 font-bold text-gray-700 text-right">Status / Ação</th>
+                            <th className="px-5 py-4 font-bold text-gray-700 text-center text-blue-600">Saidas (Total)</th>
+                            <th className="px-5 py-4 font-bold text-gray-700 text-center">Estoque Total</th>
+                            <th className="px-5 py-4 font-bold text-gray-700 text-right">Status / Acao</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {relatorioEstoque.map(prod => (
-                            <tr key={prod.id} className="hover:bg-gray-50 transition-colors">
-                              <td className="px-5 py-3">
-                                <div className="flex items-center gap-3">
-                                  <img src={formatImageUrl(prod.imagem)} className="w-10 h-10 rounded-md object-contain p-0.5 border border-gray-200" />
-                                  <div>
-                                    <p className="font-bold text-slate-800 line-clamp-1">{prod.nome_camisa}</p>
-                                    <p className="text-xs text-gray-500">Tam: {prod.tamanhos?.join(', ') || 'N/A'}</p>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-5 py-3 text-center font-mono font-bold text-blue-600">
-                                {prod.saidas > 0 ? `-${prod.saidas}` : '0'}
-                              </td>
-                              <td className="px-5 py-3 text-center">
-                                {editingStockId === prod.id ? (
-                                  <input type="number" min="0" value={tempStockValue} onChange={(e) => setTempStockValue(e.target.value)} className="w-20 px-2 py-1 text-center border border-blue-400 rounded-md shadow-inner outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold" autoFocus />
-                                ) : (
-                                  <span className={`font-mono font-black text-lg ${prod.estoqueAtual === 0 ? 'text-red-500' : prod.estoqueAtual <= 10 ? 'text-orange-500' : 'text-slate-800'}`}>
-                                    {prod.estoqueAtual}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-5 py-3 text-right">
-                                {editingStockId === prod.id ? (
-                                  <div className="flex justify-end gap-2">
-                                    <button onClick={() => setEditingStockId(null)} className="p-1.5 text-gray-500 hover:bg-gray-200 rounded-md transition-colors"><X className="w-4 h-4"/></button>
-                                    <button onClick={() => handleQuickStockSave(prod.id)} className="p-1.5 bg-blue-600 text-white hover:bg-blue-700 rounded-md transition-colors"><Save className="w-4 h-4"/></button>
-                                  </div>
-                                ) : (
-                                  <>
-                                    {prod.status === 'Esgotado' && <span className="bg-red-100 text-red-700 font-bold px-2.5 py-1 rounded-md text-xs">Esgotado</span>}
-                                    {prod.status === 'Crítico' && <span className="bg-orange-100 text-orange-700 font-bold px-2.5 py-1 rounded-md text-xs">Crítico (&lt;10)</span>}
-                                    {prod.status === 'Baixo' && <span className="bg-yellow-100 text-yellow-700 font-bold px-2.5 py-1 rounded-md text-xs">Baixo (&lt;20)</span>}
-                                    {prod.status === 'Normal' && <span className="bg-green-100 text-green-700 font-bold px-2.5 py-1 rounded-md text-xs">Normal</span>}
-                                   
-                                    <button onClick={() => { setEditingStockId(prod.id); setTempStockValue(prod.estoqueAtual); }} className="ml-3 text-xs bg-slate-900 text-white px-2 py-1 rounded hover:bg-slate-800">Repor</button>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
+                        <tbody>
+                          {relatorioEstoque.map(prod => {
+                            const isExpanded = expandedStockId === prod.id;
+                            const tamanhos = prod.tamanhos || [];
+                            // Inicializa estoque_por_tamanho com 0 para tamanhos sem registro
+                            const ept = prod.estoquePorTamanho || Object.fromEntries(tamanhos.map(t => [t, 0]));
+                            return (
+                              <React.Fragment key={prod.id}>
+                                {/* Linha principal do produto */}
+                                <tr className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${isExpanded ? 'bg-blue-50 border-blue-100' : ''}`}>
+                                  <td className="px-5 py-3">
+                                    <div className="flex items-center gap-3">
+                                      <img src={formatImageUrl(prod.imagem)} className="w-10 h-10 rounded-md object-contain p-0.5 border border-gray-200" />
+                                      <div>
+                                        <p className="font-bold text-slate-800 line-clamp-1">{prod.nome_camisa}</p>
+                                        <p className="text-xs text-gray-500">Tam: {tamanhos.join(', ') || 'N/A'}</p>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="px-5 py-3 text-center font-mono font-bold text-blue-600">
+                                    {prod.saidas > 0 ? `-${prod.saidas}` : '0'}
+                                  </td>
+                                  <td className="px-5 py-3 text-center">
+                                    <span className={`font-mono font-black text-lg ${prod.estoqueAtual === 0 ? 'text-red-500' : prod.estoqueAtual <= 10 ? 'text-orange-500' : 'text-slate-800'}`}>
+                                      {prod.estoqueAtual}
+                                    </span>
+                                  </td>
+                                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                                    {prod.status === 'Esgotado' && <span className="bg-red-100 text-red-700 font-bold px-2.5 py-1 rounded-md text-xs mr-2">Esgotado</span>}
+                                    {prod.status === 'Crítico' && <span className="bg-orange-100 text-orange-700 font-bold px-2.5 py-1 rounded-md text-xs mr-2">Critico</span>}
+                                    {prod.status === 'Baixo' && <span className="bg-yellow-100 text-yellow-700 font-bold px-2.5 py-1 rounded-md text-xs mr-2">Baixo</span>}
+                                    {prod.status === 'Normal' && <span className="bg-green-100 text-green-700 font-bold px-2.5 py-1 rounded-md text-xs mr-2">Normal</span>}
+                                    <button
+                                      onClick={() => {
+                                        if (isExpanded) { setExpandedStockId(null); setTempSizeValues({}); }
+                                        else { setExpandedStockId(prod.id); setTempSizeValues(Object.fromEntries(tamanhos.map(t => [t, ept[t] ?? 0]))); }
+                                      }}
+                                      className={`text-xs px-3 py-1 rounded font-bold transition-colors ${isExpanded ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-slate-900 text-white hover:bg-slate-700'}`}
+                                    >
+                                      {isExpanded ? 'Fechar' : 'Repor'}
+                                    </button>
+                                  </td>
+                                </tr>
+
+                                {/* Sub-linhas por tamanho (expansíveis) */}
+                                {isExpanded && tamanhos.map(tam => (
+                                  <tr key={`${prod.id}-${tam}`} className="bg-blue-50 border-b border-blue-100">
+                                    <td className="pl-16 pr-5 py-2.5 text-gray-600 font-medium">
+                                      <span className="inline-flex items-center gap-2">
+                                        <span className="w-7 h-7 rounded bg-slate-800 text-white text-xs font-black flex items-center justify-center">{tam}</span>
+                                        Tamanho {tam}
+                                      </span>
+                                    </td>
+                                    <td className="px-5 py-2.5 text-center text-xs text-gray-400">—</td>
+                                    <td className="px-5 py-2.5 text-center">
+                                      <input
+                                        type="number" min="0"
+                                        value={tempSizeValues[tam] ?? ept[tam] ?? 0}
+                                        onChange={e => setTempSizeValues(prev => ({ ...prev, [tam]: e.target.value }))}
+                                        className="w-20 px-2 py-1 text-center border border-blue-400 rounded-md outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold bg-white"
+                                      />
+                                    </td>
+                                    <td className="px-5 py-2.5 text-right">
+                                      <button
+                                        onClick={() => handleSizeStockSave(prod.id, tam, tempSizeValues[tam] ?? ept[tam] ?? 0)}
+                                        className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-700 flex items-center gap-1 ml-auto"
+                                      >
+                                        <Save className="w-3 h-3"/> Salvar
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </React.Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1739,18 +1888,34 @@ export default function App() {
 
                   {/* SUB-ABAS DO BI */}
                   <div className="flex gap-2 border-b border-gray-200 mt-6 pt-4 overflow-x-auto scrollbar-hide">
-                    <button onClick={() => setBiSubTab('estoque')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'estoque' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><ClipboardList className="w-4 h-4"/> Relatório de Estoque</button>
+                    <button onClick={() => setBiSubTab('estoque')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'estoque' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><BarChart3 className="w-4 h-4"/> Relatorio de Vendas</button>
+                    <button onClick={() => setBiSubTab('historico_estoque')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'historico_estoque' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><Package className="w-4 h-4"/> Relatorio de Estoque</button>
                     <button onClick={() => setBiSubTab('clientes')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'clientes' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><Users className="w-4 h-4"/> Perfil de Cliente</button>
-                    <button onClick={() => setBiSubTab('financeiro')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'financeiro' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><Wallet className="w-4 h-4"/> Relatório Financeiro</button>
+                    <button onClick={() => setBiSubTab('financeiro')} className={`px-5 py-3 text-sm font-bold flex items-center gap-2 whitespace-nowrap transition-colors border-b-2 ${biSubTab === 'financeiro' ? 'border-blue-600 text-blue-700 bg-blue-50/50 rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}><Wallet className="w-4 h-4"/> Relatorio Financeiro</button>
                   </div>
 
                   {/* SUB-ABA 1: RELATÓRIO DE ESTOQUE (Entradas vs Saídas Mensais) */}
                   {/* SUB-ABA 1: RELATÓRIO DE VENDAS PRODUTOS */}
                   {biSubTab === 'estoque' && (
-                    <div className="animate-in fade-in duration-300">
+                    <div className="animate-in fade-in duration-300 space-y-4">
+                      {/* Filtro de período */}
+                      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                        <div className="flex flex-wrap gap-3 items-end">
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Inicio</label><input type="date" value={filtroVendasInicio} onChange={e => setFiltroVendasInicio(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Fim</label><input type="date" value={filtroVendasFim} onChange={e => setFiltroVendasFim(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div className="flex gap-2">{[{l:'7d',d:7},{l:'30d',d:30},{l:'90d',d:90},{l:'1 ano',d:365}].map(({l,d})=>(<button key={d} onClick={()=>{const f=new Date(),i=new Date();i.setDate(f.getDate()-d);setFiltroVendasInicio(i.toISOString().slice(0,10));setFiltroVendasFim(f.toISOString().slice(0,10));}} className="px-3 py-2 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-700 rounded-lg text-xs font-bold transition-colors">{l}</button>))}</div>
+                          <button onClick={recarregarRelatorios} disabled={isLoadingRelatorios} className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors"><Loader2 className={`w-3 h-3 ${isLoadingRelatorios ? 'animate-spin' : 'hidden'}`}/>{isLoadingRelatorios ? 'Atualizando...' : 'Atualizar'}</button>
+                        </div>
+                      </div>
                       {isLoadingRelatorios ? (
                         <div className="text-center py-12">
-                          <p className="text-gray-500">Carregando relatório de vendas...</p>
+                          <p className="text-gray-500">Carregando relatorio de vendas...</p>
+                        </div>
+                      ) : erroRelatorios.vendas ? (
+                        <div className="text-center py-12 space-y-3">
+                          <AlertTriangle className="w-10 h-10 text-red-400 mx-auto" />
+                          <p className="text-red-600 font-medium">{erroRelatorios.vendas}</p>
+                          <button onClick={() => { setRelatorioVendasProdutos(null); setErroRelatorios(e => ({...e, vendas: null})); setIsLoadingRelatorios(true); fetch(`${API_BASE_URL}/relatorios/vendas-produtos/`, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } }).then(r => r.json()).then(d => setRelatorioVendasProdutos(d)).catch(e => setErroRelatorios(prev => ({...prev, vendas: e.message}))).finally(() => setIsLoadingRelatorios(false)); }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Tentar novamente</button>
                         </div>
                       ) : relatorioVendasProdutos ? (
                         <div className="space-y-6">
@@ -1776,8 +1941,14 @@ export default function App() {
 
                           {/* Tabela de Desempenho */}
                           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="p-5 border-b border-gray-100 bg-gray-50">
+                            <div className="p-5 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
                               <h4 className="font-bold text-gray-800 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-blue-500"/> Desempenho por Produto</h4>
+                              <button onClick={() => {
+                                const rows = relatorioVendasProdutos.tabela_desempenho || [];
+                                const csv = ['Produto,Tamanhos,Vendidas,Estoque,Receita,Status,Tendencia,Dias sem venda', ...rows.map(p => `"${p.nome}","${(p.tamanhos||[]).join('/')}",${p.unidades_vendidas},${p.estoque_atual},${p.receita},${p.status},${p.tendencia||''},${p.dias_sem_venda??''}`)].join('\n');
+                                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'relatorio_vendas.csv'; a.click();
+                              }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 flex items-center gap-1"><Save className="w-3 h-3"/> Exportar CSV</button>
                             </div>
                             <div className="overflow-x-auto">
                               <table className="w-full text-sm">
@@ -1789,13 +1960,15 @@ export default function App() {
                                     <th className="px-5 py-3 text-center font-bold">Estoque</th>
                                     <th className="px-5 py-3 text-right font-bold">Receita</th>
                                     <th className="px-5 py-3 text-center font-bold">Status</th>
+                                    <th className="px-5 py-3 text-center font-bold">Tendencia</th>
+                                    <th className="px-5 py-3 text-center font-bold">Sem venda</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                   {relatorioVendasProdutos.tabela_desempenho?.map((prod, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50">
+                                    <tr key={idx} className={`hover:bg-gray-50 ${prod.status === 'Repor logo' ? 'bg-red-50' : ''}`}>
                                       <td className="px-5 py-3 font-medium text-gray-800">{prod.nome}</td>
-                                      <td className="px-5 py-3 text-gray-600 text-xs">{prod.tamanhos.join(', ')}</td>
+                                      <td className="px-5 py-3 text-gray-600 text-xs">{(prod.tamanhos||[]).join(', ')}</td>
                                       <td className="px-5 py-3 text-center font-bold text-blue-600">{prod.unidades_vendidas}</td>
                                       <td className="px-5 py-3 text-center font-bold text-gray-800">{prod.estoque_atual}</td>
                                       <td className="px-5 py-3 text-right font-bold text-green-600">R$ {prod.receita.toFixed(2)}</td>
@@ -1803,10 +1976,15 @@ export default function App() {
                                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                                           prod.status === 'Repor logo' ? 'bg-red-100 text-red-700' :
                                           prod.status === 'Gargalo' ? 'bg-yellow-100 text-yellow-700' :
+                                          prod.status === 'Atencao' ? 'bg-orange-100 text-orange-700' :
                                           'bg-green-100 text-green-700'
-                                        }`}>
-                                          {prod.status}
-                                        </span>
+                                        }`}>{prod.status}</span>
+                                      </td>
+                                      <td className="px-5 py-3 text-center">
+                                        {prod.tendencia === 'subindo' ? <ArrowUpRight className="w-4 h-4 text-green-600 mx-auto"/> : prod.tendencia === 'caindo' ? <ArrowDownRight className="w-4 h-4 text-red-500 mx-auto"/> : <span className="text-gray-400 text-xs">—</span>}
+                                      </td>
+                                      <td className="px-5 py-3 text-center text-xs text-gray-500">
+                                        {prod.dias_sem_venda === -1 ? 'Nunca' : prod.dias_sem_venda != null ? `${prod.dias_sem_venda}d` : '—'}
                                       </td>
                                     </tr>
                                   ))}
@@ -1816,17 +1994,140 @@ export default function App() {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                        <p className="text-center text-gray-500 py-8">Nenhum dado disponivel.</p>
                       )}
+                    </div>
+                  )}
+
+                  {/* SUB-ABA: RELATÓRIO DE ESTOQUE (Entradas e Saídas por período) */}
+                  {biSubTab === 'historico_estoque' && (
+                    <div className="animate-in fade-in duration-300 space-y-6">
+
+                      {/* Filtros de data */}
+                      <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                        <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><CalendarDays className="w-5 h-5 text-blue-500"/> Filtrar Período</h4>
+                        <div className="flex flex-wrap gap-4 items-end">
+                          <div>
+                            <label className="block text-xs font-bold text-gray-600 mb-1">Data Início</label>
+                            <input type="date" value={filtroEstoqueDataInicio} onChange={e => setFiltroEstoqueDataInicio(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-600 mb-1">Data Fim</label>
+                            <input type="date" value={filtroEstoqueDataFim} onChange={e => setFiltroEstoqueDataFim(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                          </div>
+                          <div className="flex gap-2">
+                            {[{label:'7d', dias:7},{label:'30d', dias:30},{label:'90d', dias:90},{label:'1 ano', dias:365}].map(({label, dias}) => (
+                              <button key={dias} onClick={() => {
+                                const fim = new Date(); const ini = new Date(); ini.setDate(fim.getDate() - dias);
+                                setFiltroEstoqueDataInicio(ini.toISOString().slice(0,10)); setFiltroEstoqueDataFim(fim.toISOString().slice(0,10));
+                              }} className="px-3 py-2 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-700 rounded-lg text-xs font-bold transition-colors">{label}</button>
+                            ))}
+                          </div>
+                          <span className="ml-auto flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-xs font-bold"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse inline-block"></span> Tempo real</span>
+                        </div>
+                      </div>
+
+                      {/* Totalizadores */}
+                      {(() => {
+                        const totalEntradas = relatorioEstoquePeriodo.reduce((s, p) => s + p.entradas, 0);
+                        const totalSaidas = relatorioEstoquePeriodo.reduce((s, p) => s + p.saidas, 0);
+                        const saldo = totalEntradas - totalSaidas;
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border border-green-200">
+                              <p className="text-sm text-green-700 font-medium">Total de Entradas</p>
+                              <p className="text-2xl font-black text-green-900">{totalEntradas} un.</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-red-50 to-red-100 p-4 rounded-lg border border-red-200">
+                              <p className="text-sm text-red-700 font-medium">Total de Saidas</p>
+                              <p className="text-2xl font-black text-red-900">{totalSaidas} un.</p>
+                            </div>
+                            <div className={`p-4 rounded-lg border ${saldo >= 0 ? 'bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200' : 'bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200'}`}>
+                              <p className={`text-sm font-medium ${saldo >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>Saldo do Período</p>
+                              <p className={`text-2xl font-black ${saldo >= 0 ? 'text-blue-900' : 'text-orange-900'}`}>{saldo >= 0 ? '+' : ''}{saldo} un.</p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Tabela por produto */}
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div className="p-5 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                          <h4 className="font-bold text-gray-800 flex items-center gap-2"><Package className="w-5 h-5 text-blue-500"/> Movimentacao por Produto</h4>
+                          <button onClick={() => {
+                            const rows = relatorioEstoquePeriodo;
+                            const csv = ['Produto,Entradas,Saidas,Saldo,Estoque Atual', ...rows.map(p => `"${p.nome}",${p.entradas},${p.saidas},${p.entradas - p.saidas},${p.estoque_atual}`)].join('\n');
+                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'relatorio_estoque.csv'; a.click();
+                          }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 flex items-center gap-1"><Save className="w-3 h-3"/> Exportar CSV</button>
+                        </div>
+                        {relatorioEstoquePeriodo.length === 0 ? (
+                          <div className="text-center py-12">
+                            <Package className="w-10 h-10 text-gray-300 mx-auto mb-2"/>
+                            <p className="text-gray-500 text-sm">Nenhuma movimentacao no periodo selecionado.</p>
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-white border-b sticky top-0">
+                                <tr className="text-gray-600">
+                                  <th className="px-5 py-3 text-left font-bold">Produto</th>
+                                  <th className="px-5 py-3 text-center font-bold">Tamanho</th>
+                                  <th className="px-5 py-3 text-center font-bold text-green-600">Entradas</th>
+                                  <th className="px-5 py-3 text-center font-bold text-red-600">Saidas</th>
+                                  <th className="px-5 py-3 text-center font-bold">Saldo</th>
+                                  <th className="px-5 py-3 text-center font-bold">Estoque Atual</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {relatorioEstoquePeriodo.map((prod, idx) => {
+                                  const saldo = prod.entradas - prod.saidas;
+                                  return (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                      <td className="px-5 py-3 font-medium text-gray-800">{prod.nome}</td>
+                                      <td className="px-5 py-3 text-center">
+                                        <span className="inline-flex items-center justify-center w-8 h-8 rounded bg-slate-800 text-white text-xs font-black">{prod.tamanho}</span>
+                                      </td>
+                                      <td className="px-5 py-3 text-center font-bold text-green-600">{prod.entradas > 0 ? `+${prod.entradas}` : '—'}</td>
+                                      <td className="px-5 py-3 text-center font-bold text-red-600">{prod.saidas > 0 ? `-${prod.saidas}` : '—'}</td>
+                                      <td className="px-5 py-3 text-center">
+                                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${saldo > 0 ? 'bg-green-100 text-green-700' : saldo < 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
+                                          {saldo > 0 ? '+' : ''}{saldo}
+                                        </span>
+                                      </td>
+                                      <td className="px-5 py-3 text-center font-bold text-gray-800">{prod.estoque_atual}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
                   {/* SUB-ABA 2: PERFIL DE CLIENTE */}
                   {biSubTab === 'clientes' && (
-                    <div className="animate-in fade-in duration-300">
+                    <div className="animate-in fade-in duration-300 space-y-4">
+                      {/* Filtro de período */}
+                      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                        <div className="flex flex-wrap gap-3 items-end">
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Inicio</label><input type="date" value={filtroClientesInicio} onChange={e => setFiltroClientesInicio(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Fim</label><input type="date" value={filtroClientesFim} onChange={e => setFiltroClientesFim(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div className="flex gap-2">{[{l:'7d',d:7},{l:'30d',d:30},{l:'90d',d:90},{l:'1 ano',d:365}].map(({l,d})=>(<button key={d} onClick={()=>{const f=new Date(),i=new Date();i.setDate(f.getDate()-d);setFiltroClientesInicio(i.toISOString().slice(0,10));setFiltroClientesFim(f.toISOString().slice(0,10));}} className="px-3 py-2 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-700 rounded-lg text-xs font-bold transition-colors">{l}</button>))}</div>
+                          <button onClick={recarregarRelatorios} disabled={isLoadingRelatorios} className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors"><Loader2 className={`w-3 h-3 ${isLoadingRelatorios ? 'animate-spin' : 'hidden'}`}/>{isLoadingRelatorios ? 'Atualizando...' : 'Atualizar'}</button>
+                        </div>
+                      </div>
                       {isLoadingRelatorios ? (
                         <div className="text-center py-12">
-                          <p className="text-gray-500">Carregando relatório de clientes...</p>
+                          <p className="text-gray-500">Carregando relatorio de clientes...</p>
+                        </div>
+                      ) : erroRelatorios.clientes ? (
+                        <div className="text-center py-12 space-y-3">
+                          <AlertTriangle className="w-10 h-10 text-red-400 mx-auto" />
+                          <p className="text-red-600 font-medium">{erroRelatorios.clientes}</p>
+                          <button onClick={() => { setErroRelatorios(e => ({...e, clientes: null})); setIsLoadingRelatorios(true); fetch(`${API_BASE_URL}/relatorios/perfil-clientes/`, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } }).then(r => r.json()).then(d => setRelatorioPerfilClientes(d)).catch(e => setErroRelatorios(prev => ({...prev, clientes: e.message}))).finally(() => setIsLoadingRelatorios(false)); }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Tentar novamente</button>
                         </div>
                       ) : relatorioPerfilClientes ? (
                         <div className="space-y-6">
@@ -1913,19 +2214,80 @@ export default function App() {
                               </div>
                             </div>
                           </div>
+
+                          {/* Evolução Mensal de Novos Clientes */}
+                          {/* Exportar CSV */}
+                          <div className="flex justify-end">
+                            <button onClick={() => {
+                              const d = relatorioPerfilClientes;
+                              const linhas = [
+                                ['Metrica', 'Valor'],
+                                ['Total de Clientes', d.metricas_principais?.total_clientes],
+                                ['Novos no Mes', d.metricas_principais?.novos_clientes_mes],
+                                ['% Recorrentes', d.metricas_principais?.percentual_recorrentes],
+                                ['Ticket Medio', d.habitos_compra?.ticket_medio],
+                                [],
+                                ['Faixa Etaria', 'Quantidade'],
+                                ...Object.entries(d.faixa_etaria || {}).map(([k,v]) => [k, v]),
+                                [],
+                                ['Genero', 'Quantidade'],
+                                ...Object.entries(d.genero || {}).map(([k,v]) => [k, v]),
+                                [],
+                                ['Regiao', 'Quantidade'],
+                                ...(d.top_regioes || []).map(r => [r.regiao, r.quantidade]),
+                              ];
+                              const csv = linhas.map(r => r.join(',')).join('\n');
+                              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                              const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'relatorio_clientes.csv'; a.click();
+                            }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 flex items-center gap-1"><Save className="w-3 h-3"/> Exportar CSV</button>
+                          </div>
+
+                          {relatorioPerfilClientes.evolucao_mensal?.length > 0 && (
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-blue-500"/> Novos Clientes por Mes (ultimos 6 meses)</h4>
+                              <div className="flex items-end gap-3 h-28">
+                                {relatorioPerfilClientes.evolucao_mensal.map((item, idx) => {
+                                  const max = Math.max(...relatorioPerfilClientes.evolucao_mensal.map(i => i.novos), 1);
+                                  const pct = Math.max((item.novos / max) * 100, 4);
+                                  return (
+                                    <div key={idx} className="flex-1 flex flex-col items-center gap-1">
+                                      <span className="text-xs font-bold text-gray-700">{item.novos}</span>
+                                      <div className="w-full bg-blue-500 rounded-t-md transition-all" style={{height: `${pct}%`}}></div>
+                                      <span className="text-xs text-gray-500 whitespace-nowrap">{item.mes.slice(5)}/{item.mes.slice(0,4).slice(2)}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
-                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                        <p className="text-center text-gray-500 py-8">Nenhum dado disponivel.</p>
                       )}
                     </div>
                   )}
 
                   {/* SUB-ABA 3: RELATÓRIO FINANCEIRO */}
                   {biSubTab === 'financeiro' && (
-                    <div className="animate-in fade-in duration-300">
+                    <div className="animate-in fade-in duration-300 space-y-4">
+                      {/* Filtro de período */}
+                      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                        <div className="flex flex-wrap gap-3 items-end">
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Inicio</label><input type="date" value={filtroFinanceiroInicio} onChange={e => setFiltroFinanceiroInicio(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div><label className="block text-xs font-bold text-gray-600 mb-1">Data Fim</label><input type="date" value={filtroFinanceiroFim} onChange={e => setFiltroFinanceiroFim(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"/></div>
+                          <div className="flex gap-2">{[{l:'7d',d:7},{l:'30d',d:30},{l:'90d',d:90},{l:'1 ano',d:365}].map(({l,d})=>(<button key={d} onClick={()=>{const f=new Date(),i=new Date();i.setDate(f.getDate()-d);setFiltroFinanceiroInicio(i.toISOString().slice(0,10));setFiltroFinanceiroFim(f.toISOString().slice(0,10));}} className="px-3 py-2 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-700 rounded-lg text-xs font-bold transition-colors">{l}</button>))}</div>
+                          <button onClick={recarregarRelatorios} disabled={isLoadingRelatorios} className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors"><Loader2 className={`w-3 h-3 ${isLoadingRelatorios ? 'animate-spin' : 'hidden'}`}/>{isLoadingRelatorios ? 'Atualizando...' : 'Atualizar'}</button>
+                        </div>
+                      </div>
                       {isLoadingRelatorios ? (
                         <div className="text-center py-12">
-                          <p className="text-gray-500">Carregando relatório financeiro...</p>
+                          <p className="text-gray-500">Carregando relatorio financeiro...</p>
+                        </div>
+                      ) : erroRelatorios.financeiro ? (
+                        <div className="text-center py-12 space-y-3">
+                          <AlertTriangle className="w-10 h-10 text-red-400 mx-auto" />
+                          <p className="text-red-600 font-medium">{erroRelatorios.financeiro}</p>
+                          <button onClick={() => { setErroRelatorios(e => ({...e, financeiro: null})); setIsLoadingRelatorios(true); fetch(`${API_BASE_URL}/relatorios/financeiro/`, { headers: { 'X-User-ID': String(appUser?.id_usuario || '') } }).then(r => r.json()).then(d => setRelatorioFinanceiro(d)).catch(e => setErroRelatorios(prev => ({...prev, financeiro: e.message}))).finally(() => setIsLoadingRelatorios(false)); }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Tentar novamente</button>
                         </div>
                       ) : relatorioFinanceiro ? (
                         <div className="space-y-6">
@@ -1940,7 +2302,7 @@ export default function App() {
                               <p className="text-2xl font-black text-red-900">R$ {relatorioFinanceiro.metricas_principais?.custos_totais?.toFixed(2) || '0.00'}</p>
                             </div>
                             <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
-                              <p className="text-sm  text-blue-700 font-medium">Lucro Líquido</p>
+                              <p className="text-sm text-blue-700 font-medium">Lucro Liquido</p>
                               <p className="text-2xl font-black text-blue-900">R$ {relatorioFinanceiro.metricas_principais?.lucro_liquido?.toFixed(2) || '0.00'}</p>
                             </div>
                             <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
@@ -1948,6 +2310,37 @@ export default function App() {
                               <p className="text-2xl font-black text-purple-900">{relatorioFinanceiro.metricas_principais?.margem_lucro_geral || 0}%</p>
                             </div>
                           </div>
+
+                          {/* Comparativo Mensal */}
+                          {relatorioFinanceiro.comparativo_mensal && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                                <p className="text-xs text-gray-500 font-medium">Faturamento Mês Atual</p>
+                                <p className="text-xl font-black text-gray-900">R$ {relatorioFinanceiro.comparativo_mensal.faturamento_mes_atual?.toFixed(2)}</p>
+                              </div>
+                              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                                <p className="text-xs text-gray-500 font-medium">Faturamento Mês Anterior</p>
+                                <p className="text-xl font-black text-gray-900">R$ {relatorioFinanceiro.comparativo_mensal.faturamento_mes_anterior?.toFixed(2)}</p>
+                              </div>
+                              <div className={`p-4 rounded-xl border shadow-sm ${relatorioFinanceiro.comparativo_mensal.delta_percentual >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                                <p className="text-xs text-gray-500 font-medium">Variacao vs. Mes Anterior</p>
+                                <p className={`text-xl font-black flex items-center gap-1 ${relatorioFinanceiro.comparativo_mensal.delta_percentual >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                  {relatorioFinanceiro.comparativo_mensal.delta_percentual >= 0 ? <ArrowUpRight className="w-5 h-5"/> : <ArrowDownRight className="w-5 h-5"/>}
+                                  {relatorioFinanceiro.comparativo_mensal.delta_percentual}%
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Alertas de Pedidos Cancelados */}
+                          {relatorioFinanceiro.pedidos_cancelados?.quantidade > 0 && (
+                            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-center gap-3">
+                              <AlertTriangle className="w-5 h-5 text-orange-500 shrink-0"/>
+                              <p className="text-sm text-orange-800 font-medium">
+                                {relatorioFinanceiro.pedidos_cancelados.quantidade} pedido(s) cancelado(s) — valor perdido: <strong>R$ {relatorioFinanceiro.pedidos_cancelados.valor_perdido?.toFixed(2)}</strong>
+                              </p>
+                            </div>
+                          )}
 
                           {/* Divisão de Custos */}
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1988,10 +2381,40 @@ export default function App() {
                             </div>
                           </div>
 
+                          {/* Receita por Categoria */}
+                          {relatorioFinanceiro.receita_por_categoria?.length > 0 && (
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                              <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Tag className="w-5 h-5 text-indigo-500"/> Receita por Categoria</h4>
+                              <div className="space-y-2">
+                                {relatorioFinanceiro.receita_por_categoria.map((cat, idx) => {
+                                  const total = relatorioFinanceiro.metricas_principais?.faturamento_total || 1;
+                                  const pct = Math.round((cat.receita / total) * 100);
+                                  return (
+                                    <div key={idx}>
+                                      <div className="flex justify-between text-sm mb-1">
+                                        <span className="font-bold text-gray-700">{cat.categoria}</span>
+                                        <span className="text-gray-600">R$ {cat.receita.toFixed(2)} <span className="text-gray-400">({pct}%)</span></span>
+                                      </div>
+                                      <div className="w-full bg-gray-200 rounded-full h-2">
+                                        <div className="bg-indigo-500 h-2 rounded-full" style={{width: `${pct}%`}}></div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
                           {/* Análise por Produto */}
                           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="p-5 border-b border-gray-100 bg-gray-50">
-                              <h4 className="font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-500"/> Análise de Lucratividade por Produto</h4>
+                            <div className="p-5 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                              <h4 className="font-bold text-gray-800 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-500"/> Analise de Lucratividade por Produto</h4>
+                              <button onClick={() => {
+                                const rows = relatorioFinanceiro.analise_produtos || [];
+                                const csv = ['Produto,Receita,Custo,Lucro,Margem %', ...rows.map(p => `"${p.nome}",${p.receita},${p.custo},${p.lucro},${p.margem}`)].join('\n');
+                                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'relatorio_financeiro.csv'; a.click();
+                              }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 flex items-center gap-1"><Save className="w-3 h-3"/> Exportar CSV</button>
                             </div>
                             <div className="overflow-x-auto">
                               <table className="w-full text-sm">
@@ -2006,8 +2429,11 @@ export default function App() {
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                   {relatorioFinanceiro.analise_produtos?.map((prod, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50">
-                                      <td className="px-5 py-3 font-medium text-gray-800">{prod.nome}</td>
+                                    <tr key={idx} className={`hover:bg-gray-50 ${prod.alerta_margem ? 'bg-red-50' : ''}`}>
+                                      <td className="px-5 py-3 font-medium text-gray-800 flex items-center gap-2">
+                                        {prod.alerta_margem && <AlertOctagon className="w-4 h-4 text-red-500 shrink-0"/>}
+                                        {prod.nome}
+                                      </td>
                                       <td className="px-5 py-3 text-right font-bold text-green-600">R$ {prod.receita.toFixed(2)}</td>
                                       <td className="px-5 py-3 text-right font-bold text-red-600">R$ {prod.custo.toFixed(2)}</td>
                                       <td className="px-5 py-3 text-right font-bold text-blue-600">R$ {prod.lucro.toFixed(2)}</td>
@@ -2028,7 +2454,7 @@ export default function App() {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-center text-gray-500">Erro ao carregar relatório</p>
+                        <p className="text-center text-gray-500 py-8">Nenhum dado disponivel.</p>
                       )}
                     </div>
                   )}
@@ -2144,8 +2570,10 @@ export default function App() {
                         <input type="number" step="0.01" min="0" required value={prodPreco} onChange={e => setProdPreco(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none" placeholder="299.90" />
                       </div>
                       <div>
-                        <label className="block text-sm font-bold text-blue-700 mb-1 flex items-center gap-1"><Package className="w-4 h-4"/> Qtd. Estoque DB *</label>
-                        <input type="number" min="0" required value={prodEstoque} onChange={e => setProdEstoque(e.target.value)} className="w-full px-4 py-2.5 border border-blue-300 bg-blue-50 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold text-blue-900" />
+                        <label className="block text-sm font-bold text-blue-700 mb-1 flex items-center gap-1"><Package className="w-4 h-4"/> Estoque Total (calculado)</label>
+                        <div className="w-full px-4 py-2.5 border border-blue-200 bg-blue-50 rounded-lg font-bold text-blue-900 text-center">
+                          {Object.values(prodEstoquePorTamanho).reduce((a, b) => a + (Number(b) || 0), 0)} unidades
+                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-gray-700 mb-1">Categoria Principal *</label>
@@ -2200,19 +2628,47 @@ export default function App() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-2">Tamanhos Disponíveis</label>
-                        <div className="flex flex-wrap gap-2">
+                        <label className="block text-sm font-bold text-gray-700 mb-2">Tamanhos Disponiveis</label>
+                        <div className="flex flex-wrap gap-2 mb-3">
                           {['P', 'M', 'G', 'GG', 'XG'].map(t => (
                             <button
                                type="button"
                                key={t}
-                               onClick={() => setProdTamanhos(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])}
+                               onClick={() => {
+                                 setProdTamanhos(prev => {
+                                   const novo = prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t];
+                                   setProdEstoquePorTamanho(prev2 => {
+                                     const updated = { ...prev2 };
+                                     if (!novo.includes(t)) delete updated[t]; else if (!(t in updated)) updated[t] = 0;
+                                     return updated;
+                                   });
+                                   return novo;
+                                 });
+                               }}
                                className={`w-10 h-10 text-sm font-bold border rounded-md transition-colors ${prodTamanhos.includes(t) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-gray-600 hover:border-gray-400'}`}
                             >
                               {t}
                             </button>
                           ))}
                         </div>
+                        {prodTamanhos.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-bold text-blue-700 flex items-center gap-1"><Package className="w-3 h-3"/> Estoque por tamanho</p>
+                            <div className="flex flex-wrap gap-3">
+                              {prodTamanhos.map(t => (
+                                <div key={t} className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-lg px-2 py-1">
+                                  <span className="w-6 h-6 bg-slate-800 text-white text-xs font-black rounded flex items-center justify-center">{t}</span>
+                                  <input
+                                    type="number" min="0"
+                                    value={prodEstoquePorTamanho[t] ?? 0}
+                                    onChange={e => setProdEstoquePorTamanho(prev => ({ ...prev, [t]: parseInt(e.target.value) || 0 }))}
+                                    className="w-16 px-1 py-0.5 text-center border border-blue-300 rounded text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div>
                          <label className="block text-sm font-bold text-gray-700 mb-1">Cores (Separadas por vírgula)</label>

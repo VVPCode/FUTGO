@@ -758,36 +758,118 @@ class RelatorioVendasProdutoView(APIView):
             if not is_admin(request):
                 return Response({'erro': 'Acesso negado.'}, status=403)
 
+            # Filtro de período: ?data_inicio=YYYY-MM-DD&data_fim=YYYY-MM-DD ou ?periodo=30d|90d|12m
+            from datetime import timedelta as _td, date as _date
+            hoje = datetime.now(timezone.utc)
+            data_inicio = None
+            data_fim = None
+            di_str = request.query_params.get('data_inicio')
+            df_str = request.query_params.get('data_fim')
+            periodo = request.query_params.get('periodo')
+            if di_str:
+                try:
+                    data_inicio = datetime.fromisoformat(di_str).replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if df_str:
+                try:
+                    data_fim = datetime.fromisoformat(df_str).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if not data_inicio and periodo:
+                if periodo == '7d':
+                    data_inicio = hoje - _td(days=7)
+                elif periodo == '30d':
+                    data_inicio = hoje - _td(days=30)
+                elif periodo == '90d':
+                    data_inicio = hoje - _td(days=90)
+                elif periodo == '12m':
+                    data_inicio = hoje - _td(days=365)
+
             produtos_docs = db.collection('produtos').get()
             pedidos_docs = db.collection('pedidos').get()
             produtos = [doc.to_dict() for doc in produtos_docs]
 
             vendas = {}
+            vendas_periodo_anterior = {}
             receita_por_produto = {}
+            ultima_venda_por_produto = {}
+
             for pedido_doc in pedidos_docs:
                 pedido = pedido_doc.to_dict()
                 if pedido.get('status') == 'Cancelado':
                     continue
+
+                data_pedido_str = pedido.get('data_pedido') or pedido.get('data_criacao') or ''
+                data_pedido = None
+                if data_pedido_str:
+                    try:
+                        data_pedido = datetime.fromisoformat(str(data_pedido_str).replace('Z', '+00:00'))
+                        if data_pedido.tzinfo is None:
+                            data_pedido = data_pedido.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        pass
+
+                # Determina se o pedido está no período selecionado
+                no_periodo = (
+                    (data_inicio is None or (data_pedido and data_pedido >= data_inicio)) and
+                    (data_fim is None or (data_pedido and data_pedido <= data_fim))
+                )
+                # Período anterior tem o mesmo intervalo, imediatamente antes
+                no_periodo_anterior = False
+                if data_inicio and data_pedido:
+                    duracao = (data_fim or hoje) - data_inicio
+                    no_periodo_anterior = (data_pedido >= data_inicio - duracao) and (data_pedido < data_inicio)
+
                 for item in pedido.get('itens', []):
                     prod_id = str(item.get('id') or item.get('produto') or '')
                     quantidade = int(item.get('quantidade', 0) or 0)
                     preco = float(item.get('preco', 0.0) or 0.0)
-                    vendas[prod_id] = vendas.get(prod_id, 0) + quantidade
-                    receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + preco * quantidade
+
+                    if no_periodo:
+                        vendas[prod_id] = vendas.get(prod_id, 0) + quantidade
+                        receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + preco * quantidade
+                        if data_pedido:
+                            atual = ultima_venda_por_produto.get(prod_id)
+                            if atual is None or data_pedido > atual:
+                                ultima_venda_por_produto[prod_id] = data_pedido
+
+                    if no_periodo_anterior:
+                        vendas_periodo_anterior[prod_id] = vendas_periodo_anterior.get(prod_id, 0) + quantidade
 
             tabela_desempenho = []
             for produto in produtos:
                 prod_id = str(produto.get('id', ''))
                 unidades_vendidas = vendas.get(prod_id, 0)
+                unidades_anteriores = vendas_periodo_anterior.get(prod_id, 0)
                 receita = round(receita_por_produto.get(prod_id, 0.0), 2)
                 estoque_atual = int(produto.get('estoque', 0) or 0)
-                status = 'Sustentável'
+                status_estoque = 'Sustentavel'
                 if estoque_atual <= 0:
-                    status = 'Repor logo'
+                    status_estoque = 'Repor logo'
                 elif estoque_atual <= 10:
-                    status = 'Gargalo'
+                    status_estoque = 'Gargalo'
                 elif estoque_atual <= 20:
-                    status = 'Atenção'
+                    status_estoque = 'Atencao'
+
+                # Tendência: compara período atual com anterior
+                if data_inicio:
+                    if unidades_vendidas > unidades_anteriores:
+                        tendencia = 'subindo'
+                    elif unidades_vendidas < unidades_anteriores:
+                        tendencia = 'caindo'
+                    else:
+                        tendencia = 'estavel'
+                else:
+                    tendencia = 'estavel'
+
+                # Dias sem venda
+                ultima_venda = ultima_venda_por_produto.get(prod_id)
+                dias_sem_venda = None
+                if ultima_venda:
+                    dias_sem_venda = (hoje - ultima_venda).days
+                elif unidades_vendidas == 0:
+                    dias_sem_venda = -1  # nunca vendeu
 
                 tabela_desempenho.append({
                     'nome': produto.get('nome_camisa', 'Produto'),
@@ -795,7 +877,9 @@ class RelatorioVendasProdutoView(APIView):
                     'unidades_vendidas': unidades_vendidas,
                     'estoque_atual': estoque_atual,
                     'receita': receita,
-                    'status': status,
+                    'status': status_estoque,
+                    'tendencia': tendencia,
+                    'dias_sem_venda': dias_sem_venda,
                 })
 
             tabela_desempenho.sort(key=lambda item: item['unidades_vendidas'], reverse=True)
@@ -803,7 +887,7 @@ class RelatorioVendasProdutoView(APIView):
             total_vendas = sum(vendas.values())
             faturamento_total = round(sum(receita_por_produto.values()), 2)
             mais_vendido = ordered_vendas[0]['nome'] if ordered_vendas else 'N/A'
-            menos_vendido = ordered_vendas[-1]['nome'] if ordered_vendas else 'N/A'
+            menos_vendido = next((item['nome'] for item in reversed(ordered_vendas) if item['unidades_vendidas'] > 0), 'N/A')
 
             return Response({
                 'metricas_principais': {
@@ -813,6 +897,7 @@ class RelatorioVendasProdutoView(APIView):
                     'menos_vendido': menos_vendido,
                 },
                 'tabela_desempenho': ordered_vendas,
+                'periodo_aplicado': periodo or 'todos',
             }, status=200)
         except Exception as e:
             return Response({'erro': str(e)}, status=500)
@@ -823,14 +908,48 @@ class RelatorioPerfilClientesView(APIView):
             if not is_admin(request):
                 return Response({'erro': 'Acesso negado.'}, status=403)
 
+            from datetime import timedelta as _td
             usuarios_docs = db.collection('usuarios').get()
             pedidos_docs = db.collection('pedidos').get()
             usuarios = [doc.to_dict() for doc in usuarios_docs]
-            pedidos = [doc.to_dict() for doc in pedidos_docs]
+            todos_pedidos_cli = [doc.to_dict() for doc in pedidos_docs]
+
+            # Filtro de período: ?data_inicio=YYYY-MM-DD&data_fim=YYYY-MM-DD
+            hoje = datetime.now(timezone.utc)
+            data_inicio_cli = None
+            data_fim_cli = None
+            di_str = request.query_params.get('data_inicio')
+            df_str = request.query_params.get('data_fim')
+            if di_str:
+                try:
+                    data_inicio_cli = datetime.fromisoformat(di_str).replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if df_str:
+                try:
+                    data_fim_cli = datetime.fromisoformat(df_str).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+            def parse_data_cli(ds):
+                try:
+                    d = datetime.fromisoformat(str(ds).replace('Z', '+00:00'))
+                    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+                except Exception:
+                    return None
+
+            # Filtra pedidos pelo período selecionado
+            pedidos = []
+            for p in todos_pedidos_cli:
+                d = parse_data_cli(p.get('data_pedido') or p.get('data_criacao') or '')
+                if data_inicio_cli and (d is None or d < data_inicio_cli):
+                    continue
+                if data_fim_cli and (d is None or d > data_fim_cli):
+                    continue
+                pedidos.append(p)
 
             usuarios_reais = [u for u in usuarios if not u.get('is_admin')]
             total_clientes = len(usuarios_reais)
-            hoje = datetime.now(timezone.utc)
             inicio_do_mes = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             novos_clientes_mes = 0
 
@@ -838,7 +957,7 @@ class RelatorioPerfilClientesView(APIView):
                 data_cadastro = usuario.get('data_cadastro')
                 if data_cadastro:
                     try:
-                        data = datetime.fromisoformat(data_cadastro.replace('Z', '+00:00'))
+                        data = datetime.fromisoformat(str(data_cadastro).replace('Z', '+00:00'))
                         if data >= inicio_do_mes:
                             novos_clientes_mes += 1
                     except Exception:
@@ -846,8 +965,8 @@ class RelatorioPerfilClientesView(APIView):
 
             pedidos_por_cliente = {}
             for pedido in pedidos:
-                cliente_id = int(pedido.get('id_usuario') or 0)
-                if cliente_id <= 0:
+                cliente_id = str(pedido.get('id_usuario') or '')
+                if not cliente_id:
                     continue
                 pedidos_por_cliente[cliente_id] = pedidos_por_cliente.get(cliente_id, 0) + 1
 
@@ -901,6 +1020,24 @@ class RelatorioPerfilClientesView(APIView):
                 faturamento_total = sum(float(p.get('total', 0.0) or 0.0) for p in pedidos)
                 ticket_medio = round(faturamento_total / total_pedidos, 2)
 
+            # Evolução de novos clientes nos últimos 6 meses
+            evolucao_mensal = {}
+            for i in range(6):
+                mes_ref = hoje.replace(day=1) - __import__('datetime').timedelta(days=i * 30)
+                chave = mes_ref.strftime('%Y-%m')
+                evolucao_mensal[chave] = 0
+            for usuario in usuarios_reais:
+                data_cadastro = usuario.get('data_cadastro')
+                if data_cadastro:
+                    try:
+                        data = datetime.fromisoformat(str(data_cadastro).replace('Z', '+00:00'))
+                        chave = data.strftime('%Y-%m')
+                        if chave in evolucao_mensal:
+                            evolucao_mensal[chave] += 1
+                    except Exception:
+                        pass
+            evolucao_mensal_lista = [{'mes': k, 'novos': v} for k, v in sorted(evolucao_mensal.items())]
+
             return Response({
                 'metricas_principais': {
                     'total_clientes': total_clientes,
@@ -914,6 +1051,7 @@ class RelatorioPerfilClientesView(APIView):
                     'frequencias': frequencias,
                     'ticket_medio': ticket_medio,
                 },
+                'evolucao_mensal': evolucao_mensal_lista,
             }, status=200)
         except Exception as e:
             return Response({'erro': str(e)}, status=500)
@@ -924,15 +1062,68 @@ class RelatorioFinanceiroView(APIView):
             if not is_admin(request):
                 return Response({'erro': 'Acesso negado.'}, status=403)
 
+            from datetime import timedelta as _td
             pedidos_docs = db.collection('pedidos').get()
             produtos_docs = db.collection('produtos').get()
             produtos = {str(doc.id): doc.to_dict() for doc in produtos_docs}
 
-            pedidos = [doc.to_dict() for doc in pedidos_docs if doc.to_dict().get('status') != 'Cancelado']
+            hoje = datetime.now(timezone.utc)
+            inicio_mes_atual = hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            inicio_mes_anterior = (inicio_mes_atual - _td(days=1)).replace(day=1)
+
+            # Filtro de período: ?data_inicio=YYYY-MM-DD&data_fim=YYYY-MM-DD
+            data_inicio_fin = None
+            data_fim_fin = None
+            di_str = request.query_params.get('data_inicio')
+            df_str = request.query_params.get('data_fim')
+            if di_str:
+                try:
+                    data_inicio_fin = datetime.fromisoformat(di_str).replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if df_str:
+                try:
+                    data_fim_fin = datetime.fromisoformat(df_str).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+            def parse_data_pedido(pedido):
+                ds = pedido.get('data_pedido') or pedido.get('data_criacao') or ''
+                try:
+                    d = datetime.fromisoformat(str(ds).replace('Z', '+00:00'))
+                    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+                except Exception:
+                    return None
+
+            def no_filtro(pedido):
+                d = parse_data_pedido(pedido)
+                if data_inicio_fin and (d is None or d < data_inicio_fin):
+                    return False
+                if data_fim_fin and (d is None or d > data_fim_fin):
+                    return False
+                return True
+
+            todos_pedidos = [doc.to_dict() for doc in pedidos_docs]
+            pedidos_cancelados = [p for p in todos_pedidos if p.get('status') == 'Cancelado' and no_filtro(p)]
+            pedidos = [p for p in todos_pedidos if p.get('status') != 'Cancelado' and no_filtro(p)]
+
             faturamento_total = round(sum(float(p.get('total', 0.0) or 0.0) for p in pedidos), 2)
             custos_totais = round(faturamento_total * 0.6, 2)
             lucro_liquido = round(faturamento_total - custos_totais, 2)
             margem_liquida = round((lucro_liquido / faturamento_total) * 100, 1) if faturamento_total else 0
+
+            # Comparativo: mês atual vs. mês anterior
+            fat_mes_atual = round(sum(
+                float(p.get('total', 0.0) or 0.0) for p in pedidos
+                if (lambda d: d and d >= inicio_mes_atual)(parse_data_pedido(p))
+            ), 2)
+            fat_mes_anterior = round(sum(
+                float(p.get('total', 0.0) or 0.0) for p in pedidos
+                if (lambda d: d and inicio_mes_anterior <= d < inicio_mes_atual)(parse_data_pedido(p))
+            ), 2)
+            delta_faturamento = round(
+                ((fat_mes_atual - fat_mes_anterior) / fat_mes_anterior * 100) if fat_mes_anterior else 0, 1
+            )
 
             divisao_custos = {
                 'producao_estoque_percentual': 55,
@@ -945,14 +1136,18 @@ class RelatorioFinanceiroView(APIView):
 
             receita_por_produto = {}
             custo_por_produto = {}
+            receita_por_categoria = {}
 
             for pedido in pedidos:
                 for item in pedido.get('itens', []):
                     prod_id = str(item.get('id') or item.get('produto') or '')
                     quantidade = int(item.get('quantidade', 0) or 0)
                     preco = float(item.get('preco', 0.0) or 0.0)
-                    receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + preco * quantidade
-                    custo_por_produto[prod_id] = custo_por_produto.get(prod_id, 0.0) + preco * quantidade * 0.6
+                    receita_item = preco * quantidade
+                    receita_por_produto[prod_id] = receita_por_produto.get(prod_id, 0.0) + receita_item
+                    custo_por_produto[prod_id] = custo_por_produto.get(prod_id, 0.0) + receita_item * 0.6
+                    categoria = produtos.get(prod_id, {}).get('categoria', 'Outros')
+                    receita_por_categoria[categoria] = receita_por_categoria.get(categoria, 0.0) + receita_item
 
             analise_produtos = []
             for prod_id, receita in receita_por_produto.items():
@@ -966,9 +1161,16 @@ class RelatorioFinanceiroView(APIView):
                     'custo': custo,
                     'lucro': lucro,
                     'margem': margem,
+                    'alerta_margem': margem < 0,
                 })
 
             analise_produtos.sort(key=lambda x: x['receita'], reverse=True)
+
+            valor_cancelado = round(sum(float(p.get('total', 0.0) or 0.0) for p in pedidos_cancelados), 2)
+            receita_por_categoria_lista = [
+                {'categoria': k, 'receita': round(v, 2)}
+                for k, v in sorted(receita_por_categoria.items(), key=lambda x: x[1], reverse=True)
+            ]
 
             return Response({
                 'metricas_principais': {
@@ -977,7 +1179,17 @@ class RelatorioFinanceiroView(APIView):
                     'lucro_liquido': lucro_liquido,
                     'margem_lucro_geral': margem_liquida,
                 },
+                'comparativo_mensal': {
+                    'faturamento_mes_atual': fat_mes_atual,
+                    'faturamento_mes_anterior': fat_mes_anterior,
+                    'delta_percentual': delta_faturamento,
+                },
                 'divisao_custos': divisao_custos,
+                'receita_por_categoria': receita_por_categoria_lista,
+                'pedidos_cancelados': {
+                    'quantidade': len(pedidos_cancelados),
+                    'valor_perdido': valor_cancelado,
+                },
                 'analise_produtos': analise_produtos,
             }, status=200)
         except Exception as e:
@@ -1041,6 +1253,44 @@ class ListaDesejosView(APIView):
 
             resultado = ListaDesejosModel.remover_favorito(db, id_usuario, id_produto)
             return Response(resultado, status=200)
+        except Exception as e:
+            return Response({'erro': str(e)}, status=500)
+
+
+class EstoqueEntradaView(APIView):
+    """
+    Registra uma entrada de estoque no histórico (coleção entradas_estoque do Firestore).
+    POST: Salva o registro via Firebase Admin SDK (confiável, sem depender do client SDK).
+    """
+    def post(self, request):
+        try:
+            if not is_admin(request):
+                return Response({'erro': 'Acesso negado.'}, status=403)
+
+            produto_id  = request.data.get('produto_id')
+            nome_camisa = request.data.get('nome_camisa', '')
+            tamanho     = request.data.get('tamanho', '')
+            quantidade  = int(request.data.get('quantidade', 0) or 0)
+            app_id      = request.data.get('app_id', 'default-app-id')
+
+            if not produto_id or quantidade <= 0:
+                return Response({'erro': 'produto_id e quantidade > 0 são obrigatórios.'}, status=400)
+
+            entrada = {
+                'produto_id': str(produto_id),
+                'nome_camisa': nome_camisa,
+                'tamanho': tamanho,
+                'quantidade': quantidade,
+                'data': datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Salva via Firebase Admin SDK — confiável, não depende do Client SDK no navegador
+            caminho = db.collection('artifacts').document(str(app_id)) \
+                        .collection('public').document('data') \
+                        .collection('entradas_estoque')
+            caminho.add(entrada)
+
+            return Response({'mensagem': 'Entrada registrada.', 'entrada': entrada}, status=201)
         except Exception as e:
             return Response({'erro': str(e)}, status=500)
 

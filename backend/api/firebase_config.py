@@ -10,7 +10,7 @@ cred_path = os.path.join(BASE_DIR, 'firebase-admin-key.json')
 # Verifica se o ficheiro existe antes de tentar ligar
 if not os.path.exists(cred_path):
     print("\n" + "="*70)
-    print("🚨 ERRO FATAL: CHAVE DO FIREBASE NÃO ENCONTRADA 🚨")
+    print("ERRO FATAL: CHAVE DO FIREBASE NAO ENCONTRADA")
     print(f"O Django procurou o arquivo em: {cred_path}")
     print("\nCOMO RESOLVER:")
     print("1. Vá ao Firebase Console > Configurações do Projeto > Contas de Serviço")
@@ -25,9 +25,9 @@ if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase Admin SDK conectado com sucesso!")
+        print("Firebase Admin SDK conectado com sucesso!")
     except Exception as e:
-        print(f"❌ Erro ao conectar Firebase Admin. Erro: {e}")
+        print(f"Erro ao conectar Firebase Admin. Erro: {e}")
 
 db = firestore.client()
 # Exporta o cliente do Firestore para ser usado nas Views

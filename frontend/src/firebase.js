@@ -1,14 +1,13 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, FacebookAuthProvider } from "firebase/auth";
 
-// Substitua com os SEUS dados da consola do Firebase (Project Settings -> General -> Web App)
 const firebaseConfig = {
-  apiKey: "AIzaSyCUqDryo4hiXbbq0vBgiSMn52mtpfHKorg",
-  authDomain: "futgo-50ab3.firebaseapp.com",
-  projectId: "futgo-50ab3",
-  storageBucket: "futgo-50ab3.firebasestorage.app",
-  messagingSenderId: "1037379736383",
-  appId: "1:1037379736383:web:d1265dbd703c1af466f98a"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);

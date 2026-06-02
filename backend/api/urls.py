@@ -22,7 +22,8 @@ from .views import (
     RelatorioFinanceiroView,
     # --- LISTA DE DESEJOS ---
     ListaDesejosView,
-    ListaDesejosCompletoView
+    ListaDesejosCompletoView,
+    EstoqueEntradaView,
 )
 
 urlpatterns = [
@@ -85,4 +86,9 @@ urlpatterns = [
     path('favoritos/<int:id_usuario>/', ListaDesejosView.as_view(), name='lista_desejos'),
     path('favoritos/<int:id_usuario>/<str:id_produto>/', ListaDesejosView.as_view(), name='favorito_detail'),
     path('favoritos-completo/<int:id_usuario>/', ListaDesejosCompletoView.as_view(), name='lista_desejos_completo'),
+
+    # ==========================
+    # ROTA DE MOVIMENTAÇÃO DE ESTOQUE
+    # ==========================
+    path('estoque/entrada/', EstoqueEntradaView.as_view(), name='estoque_entrada'),
 ]

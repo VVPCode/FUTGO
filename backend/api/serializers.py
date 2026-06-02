@@ -1,5 +1,4 @@
 from rest_framework import serializers
-from .models import Produto, Pedido, ItemPedido
 
 class CheckEmailSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
@@ -58,15 +57,21 @@ class ProdutoSerializer(serializers.Serializer):
 # 👇 NOVOS SERIALIZADORES: PARA CARRINHO DE COMPRAS, PEDIDOS E GESTÃO NO ADMIN 👇
 # ==============================================================================
 
-class ItemPedidoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ItemPedido
-        fields = ['id', 'produto', 'nome_camisa', 'quantidade', 'tamanho', 'preco_unitario']
+class ItemPedidoSerializer(serializers.Serializer):
+    id = serializers.CharField(read_only=True)
+    produto = serializers.CharField()
+    nome_camisa = serializers.CharField()
+    quantidade = serializers.IntegerField()
+    tamanho = serializers.CharField()
+    preco_unitario = serializers.FloatField()
 
-class PedidoSerializer(serializers.ModelSerializer):
-    # O many=True e read_only=True puxa automaticamente os itens vinculados ao pedido
+class PedidoSerializer(serializers.Serializer):
+    id = serializers.CharField(read_only=True)
+    id_usuario = serializers.CharField()
+    total = serializers.FloatField()
+    status = serializers.CharField()
+    data_pedido = serializers.CharField()
+    endereco_id = serializers.CharField()
+    frete_tipo = serializers.CharField()
+    frete_valor = serializers.FloatField()
     itens = ItemPedidoSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Pedido
-        fields = ['id', 'id_usuario', 'total', 'status', 'data_pedido', 'endereco_id', 'frete_tipo', 'frete_valor', 'itens']

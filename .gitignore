@@ -102,3 +102,4 @@ Editores de Código (VS Code, IntelliJ, PyCharm, etc)
 *.swp
 *.swo
 *.iml
+.claude/
